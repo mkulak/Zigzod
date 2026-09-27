@@ -41,6 +41,12 @@ int zod_aes_set_key(ZEncryptAES *self, const unsigned char *key, int size);
 void zod_aes_encrypt(const ZEncryptAES *self, const char *input, int in_size, char *output);
 void zod_aes_decrypt(const ZEncryptAES *self, const char *input, int in_size, char *output);
 
+// ---- zfont.zig ------------------------------------------------------------
+struct SDL_Surface;
+void zod_font_load(int font_type);
+void zod_font_load_all(void);
+struct SDL_Surface *zod_font_render(int font_type, const char *message);
+
 #ifdef __cplusplus
 }
 #endif

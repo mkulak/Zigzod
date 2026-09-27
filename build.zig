@@ -17,9 +17,9 @@ const std = @import("std");
 /// each other circularly, so all of them are compiled into every executable.
 const engine_libs = [_]struct { dir: []const u8, files: []const []const u8 }{
     .{ .dir = "QZod_DnSeparate", .files = &.{
-        "qzod_dnseparate.cpp", "common.cpp",       "event_handler.cpp",
-        "zfont.cpp",           "zfont_engine.cpp", "zmysql.cpp",
-        "zpsettings.cpp",      "zsdl.cpp",         "zsdl_opengl.cpp",
+        "qzod_dnseparate.cpp", "common.cpp",     "event_handler.cpp",
+        "zmysql.cpp",          "zpsettings.cpp", "zsdl.cpp",
+        "zsdl_opengl.cpp",
     } },
     .{ .dir = "QZod_DnMap", .files = &.{
         "qzod_dnmap.cpp",                "qzod_map.cpp", "zmap_crater_graphics.cpp", "zteam.cpp",

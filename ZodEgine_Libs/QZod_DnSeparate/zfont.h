@@ -5,6 +5,7 @@
 
 #include "qzod_dnseparate_global.h"
 #include "zsdl.h"
+#include <zod_zig.h>
 
 // -- FONT -------------------------------------
 #ifndef DEF_RC_FOLDER_FONT
@@ -25,19 +26,20 @@ const string font_type_string[MAX_FONT_TYPES] =
     "yellow_menu"
 };
 
+// A bitmap font. Implemented in Zig (src/zfont.zig), which owns the glyph
+// images; this class only remembers which font it is.
 class QZOD_DNSEPARATESHARED_EXPORT ZFont
 {
 	public:
-		ZFont();
+		ZFont() : type(0) {}
 
-		void Init();
-		void SetType(int type_);
-		SDL_Surface *Render(const char *message);
+		void Init() { zod_font_load(type); }
+		void SetType(int type_) { type = type_; }
+		// New surface with the rendered text (caller frees it), or nullptr.
+		SDL_Surface *Render(const char *message) { return zod_font_render(type, message); }
+
 	private:
-		int finished_init;
 		int type;
-
-		SDL_Surface *char_img[MAX_CHARACTERS];
 };
 
 #endif

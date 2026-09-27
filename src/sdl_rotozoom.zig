@@ -18,10 +18,7 @@ const c = @import("c");
 
 const Surface = c.SDL_Surface;
 
-/// A non-null C pointer as a normal Zig pointer, or null.
-fn nonNull(p: anytype) ?*std.meta.Child(@TypeOf(p)) {
-    return if (p == null) null else @ptrCast(p);
-}
+const nonNull = @import("cutil.zig").nonNull;
 
 /// Below this, a zoom factor or angle counts as zero (VALUE_LIMIT).
 const value_limit = 0.001;

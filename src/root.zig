@@ -10,6 +10,7 @@ comptime {
     _ = @import("ztime.zig");
     _ = @import("zencrypt_aes.zig");
     _ = @import("sdl_rotozoom.zig");
+    _ = @import("zfont.zig");
 }
 
 test {
@@ -17,4 +18,5 @@ test {
     _ = @import("ztime.zig");
     _ = @import("zencrypt_aes.zig");
     _ = @import("sdl_rotozoom.zig");
+    _ = @import("zfont.zig");
 }
