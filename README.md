@@ -17,6 +17,39 @@ Before running the binaries, remember to add the path to the libraries to the en
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/your/custom/path_to_folder_bin_ZodEngine/lib
 
 
+=== Building on macOS (Apple Silicon M1-M5 / Intel) ======
+
+The CMake build (CMakeLists.txt) does not need Qt, wxWidgets or MySQL.
+The qmake project is still there for Linux/QtCreator users.
+
+1. Install the Xcode command line tools and Homebrew (https://brew.sh):
+       xcode-select --install
+
+2. Build (this installs the Homebrew packages it needs, builds SDL_image /
+   SDL_mixer / SDL_ttf 1.2 into deps/, then builds the game into build/):
+       ./macos/build.sh
+
+3. Play:
+       ./macos/run_zod.sh                 # original campaign, 800x600 window, you = red vs blue bot
+       ./macos/run_zod.sh -o              # same, without OpenGL
+       ./macos/run_zod.sh -h              # all command line options
+       EDITOR=1 ./macos/run_zod.sh -f blank_maps/level_blank_01.map   # map editor
+
+   The game loads assets relative to bin/, and run_zod.sh starts it from there.
+   To run it by hand:  cd bin && ../build/zod_engine -l map_list.txt -w
+
+Notes:
+* SDL 1.2 comes from Homebrew's "sdl12-compat", which runs on SDL2 and
+  builds natively for arm64.
+* Homebrew no longer ships the SDL 1.2 versions of SDL_image, SDL_mixer and
+  SDL_ttf, so macos/build_deps.sh builds them from the maintained SDL-1.2
+  branches at github.com/libsdl-org. Delete deps/ to rebuild them.
+* The same scripts also work on Linux (install the -dev packages for
+  SDL 1.2, libpng, libjpeg, freetype, libvorbis and mpg123 first).
+* Some sound files the code refers to (for example assets/sounds/explosion_*.wav)
+  are not in this repository. The game prints "could not load" for them and runs without them.
+
+
 === for linux systems ======
 " Installing the required libraries -
 The required libraries for this game are as follows...

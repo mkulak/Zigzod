@@ -199,7 +199,7 @@ int ServerSocket::Bind()
 	si_me.sin_port = htons(port);
 	si_me.sin_addr.s_addr = htonl(INADDR_ANY);
 	
-	while(bind(s, (struct sockaddr *) &si_me, sizeof(si_me))==-1)
+	while(::bind(s, (struct sockaddr *) &si_me, sizeof(si_me))==-1)
 	{
 		printf("ServerSocket::Bind:error binding socket\n");
 		uni_pause(5000);

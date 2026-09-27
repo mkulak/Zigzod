@@ -1,6 +1,7 @@
 #include <QCoreApplication>
 // ===================================
 #include <string>
+#include <csignal>
 #include <cstdlib>
 using namespace std;
 
@@ -60,6 +61,12 @@ int main(int argc, char **argv)
     SDL_Thread *server_thread;
 
     printf("Welcome to the Zod Engine\n");
+
+#ifndef _WIN32
+    // send() on a closed socket raises SIGPIPE; MSG_NOSIGNAL is not
+    // available on macOS, so ignore the signal and let send() return an error.
+    signal(SIGPIPE, SIG_IGN);
+#endif
 
     if(argc<=1) starting_conditions.setdefaults();
 
