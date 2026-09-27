@@ -9,10 +9,12 @@ comptime {
     _ = @import("common.zig");
     _ = @import("ztime.zig");
     _ = @import("zencrypt_aes.zig");
+    _ = @import("sdl_rotozoom.zig");
 }
 
 test {
     _ = @import("common.zig");
     _ = @import("ztime.zig");
     _ = @import("zencrypt_aes.zig");
+    _ = @import("sdl_rotozoom.zig");
 }

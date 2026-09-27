@@ -17,9 +17,9 @@ const std = @import("std");
 /// each other circularly, so all of them are compiled into every executable.
 const engine_libs = [_]struct { dir: []const u8, files: []const []const u8 }{
     .{ .dir = "QZod_DnSeparate", .files = &.{
-        "qzod_dnseparate.cpp", "common.cpp",       "event_handler.cpp", "SDL_rotozoom.cpp",
-        "zfont.cpp",           "zfont_engine.cpp", "zmysql.cpp",        "zpsettings.cpp",
-        "zsdl.cpp",            "zsdl_opengl.cpp",
+        "qzod_dnseparate.cpp", "common.cpp",       "event_handler.cpp",
+        "zfont.cpp",           "zfont_engine.cpp", "zmysql.cpp",
+        "zpsettings.cpp",      "zsdl.cpp",         "zsdl_opengl.cpp",
     } },
     .{ .dir = "QZod_DnMap", .files = &.{
         "qzod_dnmap.cpp",                "qzod_map.cpp", "zmap_crater_graphics.cpp", "zteam.cpp",
@@ -133,6 +133,16 @@ pub fn build(b: *std.Build) void {
 
     const sdl = querySdl(b);
 
+    // C headers for the Zig code (src/c.h -> `@import("c")`).
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    for (sdl.include_dirs) |dir| translate_c.addSystemIncludePath(.{ .cwd_relative = dir });
+    for (sdl.macros) |m| translate_c.defineCMacro(m.name, m.value);
+    const c_mod = translate_c.createModule();
+
     // The engine: the remaining C++ sources plus the parts already ported to
     // Zig (src/root.zig), as one static library shared by both programs.
     const core_mod = b.createModule(.{
@@ -152,6 +162,7 @@ pub fn build(b: *std.Build) void {
             .flags = &cxx_flags,
         });
     }
+    core_mod.addImport("c", c_mod);
     const core = b.addLibrary(.{ .name = "zodcore", .root_module = core_mod, .linkage = .static });
 
     const exes = [_]struct { name: []const u8, sources: []const []const u8 }{
@@ -185,6 +196,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    test_mod.addImport("c", c_mod);
+    linkEngineLibraries(test_mod, sdl, use_opengl, os_tag);
     const run_tests = b.addRunArtifact(b.addTest(.{ .root_module = test_mod }));
     b.step("test", "Run the unit tests of the Zig modules").dependOn(&run_tests.step);
 
