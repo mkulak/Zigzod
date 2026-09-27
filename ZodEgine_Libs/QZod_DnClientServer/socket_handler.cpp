@@ -1,5 +1,10 @@
 #include "socket_handler.h"
 
+#ifdef __APPLE__
+#include <ifaddrs.h>
+#include <net/if_dl.h>
+#endif
+
 SocketHandler::SocketHandler()
 {
 	connected = 0;
@@ -428,6 +433,34 @@ char *SocketHandler::GetMAC(char *buf)
 		}
 		while(pAdapterInfo);
 	}
+#elif defined(__APPLE__)
+	// macOS has no SIOCGIFHWADDR; link-layer addresses come from getifaddrs().
+	struct ifaddrs *if_list, *ifa;
+
+	if(getifaddrs(&if_list) != 0)
+	{
+		printf( "SocketHandler::GetMAC: getifaddrs failed\n");
+		return buf;
+	}
+
+	for(ifa = if_list; ifa; ifa = ifa->ifa_next)
+	{
+		if(!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_LINK) continue;
+
+		struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+		if(sdl->sdl_alen != 6) continue;
+
+		unsigned char *mac = (unsigned char *)LLADDR(sdl);
+		for(int i=0; i<6;i++)
+			if(mac[i])
+			{
+				memcpy(buf, mac, 6);
+				freeifaddrs(if_list);
+				return buf;
+			}
+	}
+
+	freeifaddrs(if_list);
 #else
 	int skfd;
 	struct ifreq sIfReq;
