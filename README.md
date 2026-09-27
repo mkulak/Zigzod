@@ -52,6 +52,25 @@ Notes:
   are not in this repository. The game prints "could not load" for them and runs without them.
 
 
+=== Building with the Zig toolchain ======
+
+build.zig builds the same C++ sources with Zig's bundled clang (libc++), as an
+alternative to CMake. Requires Zig 0.16.0 or newer (https://ziglang.org/download/,
+or on macOS: brew install zig).
+
+    ./macos/build_deps.sh                  # once: SDL 1.2 + SDL_image/SDL_mixer/SDL_ttf
+    zig build                              # -> zig-out/bin/zod_engine, zig-out/bin/zod_map_editor
+    zig build run                          # play: campaign in an 800x600 window, red vs blue bot
+    zig build run -- -h                    # game options (anything after -- replaces the defaults)
+    zig build run -- -l map_list.txt -t red -b blue -w -o     # e.g. without OpenGL
+    zig build run-editor -- -f blank_maps/level_blank_01.map
+
+Build options: -Doptimize=Debug|ReleaseSafe|ReleaseFast|ReleaseSmall (default
+ReleaseFast), -Dopengl=false, -Ddeps-prefix=/path (default deps/install).
+SDL is found through pkg-config (including Homebrew on macOS), so only native
+builds are supported, not cross-compilation.
+
+
 === for linux systems ======
 " Installing the required libraries -
 The required libraries for this game are as follows...

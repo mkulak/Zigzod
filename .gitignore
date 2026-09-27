@@ -1,3 +1,7 @@
 # CMake / macOS build output
 /build/
 /deps/
+
+# zig build output
+/zig-out/
+/.zig-cache/
