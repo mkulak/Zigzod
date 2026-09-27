@@ -102,19 +102,32 @@ int ClientSocket::Connect()
 		return 0;
 	}
 	
+	memset(&c_in, 0, sizeof(c_in));
 	memcpy((char*)&c_in.sin_addr, (char*)host->h_addr, host->h_length);
 	c_in.sin_family = AF_INET;
 	c_in.sin_port = htons(port);
 
+	// The local server may not be listening yet, so keep retrying for a while.
+	// After a failed connect() a socket can't be reused on macOS/BSD (every
+	// later attempt fails too), so retry with a fresh socket each time.
+	double first_failure = current_time();
 	while(connect(s, (struct sockaddr *)&c_in, sizeof c_in) < 0)
 	{
-		static double first_failure = current_time();
-		
 		if(current_time() - first_failure > 15.0)
 		{
 			printf("could not connect to '%s'\n", address.c_str());
 			return 0;
 		}
+
+		SDL_Delay(10);
+
+#ifdef _WIN32
+		closesocket(s);
+#else
+		close(s);
+#endif
+		s = -1;
+		if(!CreateSocket()) return 0;
 	}
 	
 	shandler = new SocketHandler(s,c_in);
