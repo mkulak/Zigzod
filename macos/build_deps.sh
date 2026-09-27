@@ -97,7 +97,14 @@ build_lib SDL_mixer \
   --enable-music-mp3 --disable-music-mp3-shared \
   --disable-smpegtest
 
-build_lib SDL_ttf
+# SDL_ttf's configure looks for GNU libiconv's libiconv_open, which the
+# iconv built into macOS doesn't provide, so its showfont demo fails to link
+# (undefined _iconv_open). Link the system libiconv explicitly.
+TTF_ARGS=()
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  TTF_ARGS+=(LIBS=-liconv)
+fi
+build_lib SDL_ttf ${TTF_ARGS[@]+"${TTF_ARGS[@]}"}
 
 echo
 echo "Dependencies installed into: $PREFIX"
