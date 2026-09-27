@@ -1,4 +1,4 @@
-// C declarations of the functions implemented in Zig (src/*.zig).
+// Declarations (C linkage) of the functions implemented in Zig (src/*.zig).
 // Include this from C++ code; keep it in sync with the Zig `export fn`s.
 #ifndef ZOD_ZIG_H
 #define ZOD_ZIG_H
@@ -27,12 +27,19 @@ void zod_print_dump(const char *message, int size, const char *name);
 void zod_printd_reg(const char *message);
 
 // ---- ztime.zig ------------------------------------------------------------
-struct ZTime;
-void zod_ztime_init(struct ZTime *t);
-void zod_ztime_update(struct ZTime *t);
-void zod_ztime_pause(struct ZTime *t);
-void zod_ztime_resume(struct ZTime *t);
-void zod_ztime_set_game_speed(struct ZTime *t, double new_speed);
+class ZTime;
+void zod_ztime_init(ZTime *t);
+void zod_ztime_update(ZTime *t);
+void zod_ztime_pause(ZTime *t);
+void zod_ztime_resume(ZTime *t);
+void zod_ztime_set_game_speed(ZTime *t, double new_speed);
+
+// ---- zencrypt_aes.zig -----------------------------------------------------
+class ZEncryptAES;
+void zod_aes_init(ZEncryptAES *self);
+int zod_aes_set_key(ZEncryptAES *self, const unsigned char *key, int size);
+void zod_aes_encrypt(const ZEncryptAES *self, const char *input, int in_size, char *output);
+void zod_aes_decrypt(const ZEncryptAES *self, const char *input, int in_size, char *output);
 
 #ifdef __cplusplus
 }

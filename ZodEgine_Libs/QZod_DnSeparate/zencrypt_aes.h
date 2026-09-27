@@ -1,51 +1,32 @@
 /*
-Main code taken from www.hoozi.com
-Main code written by Niyaz PK at niyazlife@gmail.com
+AES (ECB, 16-byte blocks) for the registration key and server messages.
+Implemented in Zig: src/zencrypt_aes.zig (the original C++ version was based
+on code by Niyaz PK, www.hoozi.com).
 */
 
 #ifndef AES_ENCRYPT_H
 #define AES_ENCRYPT_H
 
 #include "qzod_dnseparate_global.h"
+#include <zod_zig.h>
 
+// Keep the fields in sync with `ZEncryptAES` in src/zencrypt_aes.zig.
 class QZOD_DNSEPARATESHARED_EXPORT ZEncryptAES
 {
 private:
-	int Nr; // The number of rounds in AES Cipher. It is simply initiated to zero. The actual value is recieved in the program.
-	int Nk; // The number of 32 bit words in the key. It is simply initiated to zero. The actual value is recieved in the program.
-	unsigned char *in, *out, state[4][4];
-	unsigned char RoundKey[240]; // The array that stores the round keys.
-	unsigned char Key[32]; // The Key input to the AES Program
+	int key_bits;              // 0 until Init_Key succeeds, then 128 or 256
+	unsigned char key[32];
 
-    //universal stuff
-    inline int getSBoxInvert(int num);
-    inline int getSBoxValue(int num);
-    inline void KeyExpansion();
-    inline void AddRoundKey(int round);
-
-    //decrypt stuff
-    inline void InvSubBytes();
-    inline void InvShiftRows();
-    inline void InvCipher();
-    inline void InvMixColumns();
-    
-    //encrypt stuff
-    inline void SubBytes();
-    inline void ShiftRows();
-    inline void MixColumns();
-    inline void Cipher();
-    
 public:
-	ZEncryptAES()
-	{
-		Nr=0;
-		Nk=0;
-	}
+	ZEncryptAES() { zod_aes_init(this); }
 
-    //public stuff
-    int Init_Key(unsigned char *key, int size);
-    void AES_Encrypt(char * input, int in_size, char *output);
-    void AES_Decrypt(char * input, int in_size, char *output);
+	// size in bits: 128 or 256. Returns 0 for other sizes.
+	int Init_Key(unsigned char *key, int size) { return zod_aes_set_key(this, key, size); }
+	// in_size is rounded up to whole 16-byte blocks.
+	void AES_Encrypt(char *input, int in_size, char *output) { zod_aes_encrypt(this, input, in_size, output); }
+	void AES_Decrypt(char *input, int in_size, char *output) { zod_aes_decrypt(this, input, in_size, output); }
 };
+
+static_assert(sizeof(ZEncryptAES) == 36, "ZEncryptAES layout must match src/zencrypt_aes.zig");
 
 #endif

@@ -8,9 +8,11 @@
 comptime {
     _ = @import("common.zig");
     _ = @import("ztime.zig");
+    _ = @import("zencrypt_aes.zig");
 }
 
 test {
     _ = @import("common.zig");
     _ = @import("ztime.zig");
+    _ = @import("zencrypt_aes.zig");
 }
