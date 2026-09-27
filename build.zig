@@ -19,7 +19,7 @@ const engine_libs = [_]struct { dir: []const u8, files: []const []const u8 }{
     .{ .dir = "QZod_DnSeparate", .files = &.{
         "qzod_dnseparate.cpp", "common.cpp", "event_handler.cpp", "SDL_rotozoom.cpp",
         "zencrypt_aes.cpp",    "zfont.cpp",  "zfont_engine.cpp",  "zmysql.cpp",
-        "zpsettings.cpp",      "zsdl.cpp",   "zsdl_opengl.cpp",   "ztime.cpp",
+        "zpsettings.cpp",      "zsdl.cpp",   "zsdl_opengl.cpp",
     } },
     .{ .dir = "QZod_DnMap", .files = &.{
         "qzod_dnmap.cpp",                "qzod_map.cpp", "zmap_crater_graphics.cpp", "zteam.cpp",
@@ -133,6 +133,27 @@ pub fn build(b: *std.Build) void {
 
     const sdl = querySdl(b);
 
+    // The engine: the remaining C++ sources plus the parts already ported to
+    // Zig (src/root.zig), as one static library shared by both programs.
+    const core_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
+        // The C++ code relies on behaviour UBSan would turn into traps.
+        .sanitize_c = .off,
+    });
+    addEngineCompileFlags(b, core_mod, gen_includes.getDirectory(), sdl, use_opengl, os_tag);
+    for (engine_libs) |lib| {
+        core_mod.addCSourceFiles(.{
+            .root = b.path(b.fmt("ZodEgine_Libs/{s}", .{lib.dir})),
+            .files = lib.files,
+            .flags = &cxx_flags,
+        });
+    }
+    const core = b.addLibrary(.{ .name = "zodcore", .root_module = core_mod, .linkage = .static });
+
     const exes = [_]struct { name: []const u8, sources: []const []const u8 }{
         .{ .name = "zod_engine", .sources = &.{ "zod_engine/main.cpp", "zod_engine/main_options.cpp" } },
         .{ .name = "zod_map_editor", .sources = &.{"zod_map_editor/main.cpp"} },
@@ -145,16 +166,27 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
             .link_libcpp = true,
-            // The code relies on behaviour UBSan would turn into traps.
             .sanitize_c = .off,
         });
-        configureEngineModule(b, mod, gen_includes.getDirectory(), sdl, use_opengl, os_tag);
+        addEngineCompileFlags(b, mod, gen_includes.getDirectory(), sdl, use_opengl, os_tag);
+        linkEngineLibraries(mod, sdl, use_opengl, os_tag);
         mod.addCSourceFiles(.{ .files = e.sources, .flags = &cxx_flags });
+        mod.linkLibrary(core);
 
         const exe = b.addExecutable(.{ .name = e.name, .root_module = mod });
         b.installArtifact(exe);
         compiled[i] = exe;
     }
+
+    // `zig build test`: unit tests of the Zig modules.
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const run_tests = b.addRunArtifact(b.addTest(.{ .root_module = test_mod }));
+    b.step("test", "Run the unit tests of the Zig modules").dependOn(&run_tests.step);
 
     // `zig build run` / `zig build run-editor`: the game loads assets
     // relative to bin/, so run from there.
@@ -175,7 +207,8 @@ pub fn build(b: *std.Build) void {
     b.step("run-editor", "Run the map editor (pass options after --)").dependOn(&run_editor.step);
 }
 
-fn configureEngineModule(
+/// Include paths and macros needed to compile engine C++ code.
+fn addEngineCompileFlags(
     b: *std.Build,
     mod: *std.Build.Module,
     gen_includes: std.Build.LazyPath,
@@ -185,11 +218,11 @@ fn configureEngineModule(
 ) void {
     mod.addIncludePath(b.path("cmake/qt_shim"));
     mod.addIncludePath(gen_includes);
+    // C declarations of the Zig functions (zod_zig.h).
+    mod.addIncludePath(b.path("src"));
     // Each engine directory is also on the include path, like qmake did.
     for (engine_libs) |lib| {
-        const dir = b.fmt("ZodEgine_Libs/{s}", .{lib.dir});
-        mod.addIncludePath(b.path(dir));
-        mod.addCSourceFiles(.{ .root = b.path(dir), .files = lib.files, .flags = &cxx_flags });
+        mod.addIncludePath(b.path(b.fmt("ZodEgine_Libs/{s}", .{lib.dir})));
     }
 
     for (export_macros) |m| mod.addCMacro(m, "1");
@@ -197,9 +230,15 @@ fn configureEngineModule(
     // Lets the executables find assets/ from any directory (zdata_dir.h).
     mod.addCMacro("ZOD_DATA_DIR", b.fmt("\"{s}\"", .{b.pathFromRoot("bin")}));
     if (!use_opengl) mod.addCMacro("DISABLE_OPENGL", "1");
+    if (use_opengl and os_tag == .macos) mod.addCMacro("GL_SILENCE_DEPRECATION", "1");
 
     for (sdl.include_dirs) |dir| mod.addSystemIncludePath(.{ .cwd_relative = dir });
     for (sdl.macros) |m| mod.addCMacro(m.name, m.value);
+}
+
+/// System libraries the executables link against (not the static library,
+/// or they would end up inside the archive).
+fn linkEngineLibraries(mod: *std.Build.Module, sdl: SdlFlags, use_opengl: bool, os_tag: std.Target.Os.Tag) void {
     for (sdl.lib_dirs) |dir| {
         mod.addLibraryPath(.{ .cwd_relative = dir });
         if (os_tag != .macos) mod.addRPath(.{ .cwd_relative = dir });
@@ -210,7 +249,6 @@ fn configureEngineModule(
     if (use_opengl) {
         if (os_tag == .macos) {
             mod.linkFramework("OpenGL", .{});
-            mod.addCMacro("GL_SILENCE_DEPRECATION", "1");
         } else {
             mod.linkSystemLibrary("GL", .{ .use_pkg_config = .no });
         }

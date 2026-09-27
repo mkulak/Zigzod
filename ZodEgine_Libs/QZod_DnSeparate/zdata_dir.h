@@ -2,7 +2,7 @@
 #define ZDATA_DIR_H
 
 // The engine loads assets/ (and map lists, settings...) relative to the
-// working directory, which must be the game's bin/ folder. The CMake build
+// working directory, which must be the game's bin/ folder. The build (build.zig)
 // defines ZOD_DATA_DIR as that folder, so the executables can be started from
 // anywhere: if assets/ is not in the current directory, switch to ZOD_DATA_DIR.
 

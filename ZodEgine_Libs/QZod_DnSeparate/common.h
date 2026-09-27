@@ -1,7 +1,10 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+// Implemented in Zig: src/common.zig (see common.cpp for the C++ adapters).
+
 #include "qzod_dnseparate_global.h"
+#include <zod_zig.h>
 
 namespace COMMON
 {
@@ -22,10 +25,6 @@ namespace COMMON
 	extern double current_time();
 	extern void create_folder(char *foldername);
 	extern void uni_pause(int m_sec);
-	extern char *wtoc_s(const wchar_t *input);
-	extern char *wtoc(const wchar_t *input, char *dest, int size);
-	extern wchar_t *ctow_s(const char *input);
-	extern wchar_t *ctow(const char *input, wchar_t *dest, int size);
 	extern void print_dump(char *message, int size, char *name);
 	extern bool points_within_distance(int x1, int y1, int x2, int y2, int distance);
 	extern bool points_within_area(int px, int py, int ax, int ay, int aw, int ah);

@@ -15,7 +15,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${ZOD_BUILD_DIR:-$ROOT/build}"
+BUILD_DIR="${ZOD_BUILD_DIR:-$ROOT/zig-out/bin}"
 EXE="zod_engine"
 if [[ "${1:-}" == "--editor" ]]; then
   EXE="zod_map_editor"
@@ -23,7 +23,7 @@ if [[ "${1:-}" == "--editor" ]]; then
 fi
 
 if [[ ! -x "$BUILD_DIR/$EXE" ]]; then
-  echo "error: $BUILD_DIR/$EXE not found. Run ./macos/build.sh first." >&2
+  echo "error: $BUILD_DIR/$EXE not found. Run 'zig build' first." >&2
   exit 1
 fi
 

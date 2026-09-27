@@ -1,6 +1,6 @@
 // Minimal stand-in for <QtCore/qglobal.h>.
 // The engine libraries only use Qt for a handful of platform/export macros,
-// so the CMake build provides them here instead of requiring a Qt install.
+// so the build provides them here instead of requiring a Qt install.
 #ifndef ZOD_QT_SHIM_QGLOBAL_H
 #define ZOD_QT_SHIM_QGLOBAL_H
 
