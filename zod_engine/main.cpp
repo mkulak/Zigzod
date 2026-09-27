@@ -32,6 +32,7 @@ TCHAR *optarg;
 
 
 #include "main_options.h"
+#include <lib_qZod_DnSeparate/zdata_dir.h>
 
 void display_help(char *shell_command);
 void display_version();
@@ -67,6 +68,9 @@ int main(int argc, char **argv)
     // available on macOS, so ignore the signal and let send() return an error.
     signal(SIGPIPE, SIG_IGN);
 #endif
+
+    // map lists, maps and settings given on the command line are relative to bin/
+    zod_enter_data_dir();
 
     if(argc<=1) starting_conditions.setdefaults();
 

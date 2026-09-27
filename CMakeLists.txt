@@ -150,6 +150,9 @@ target_compile_definitions(zod_core PUBLIC
   QZOD_DNSEPARATE_LIBRARY QZOD_DNMAP_LIBRARY QZOD_DNSOUNDENGINE_LIBRARY
   QZOD_DNSETTINGS_LIBRARY QZOD_DNGUI_LIBRARY QZOD_DNEFFECT_LIBRARY
   QZOD_DNOBJECTS_LIBRARY QZOD_DNCLIENTSERVER_LIBRARY)
+# Lets the executables find assets/ when not started from bin/ (zdata_dir.h).
+target_compile_definitions(zod_core PUBLIC
+  ZOD_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/bin")
 if(NOT ZOD_USE_OPENGL)
   target_compile_definitions(zod_core PUBLIC DISABLE_OPENGL)
 endif()

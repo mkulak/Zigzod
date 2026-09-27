@@ -33,10 +33,12 @@ The qmake project is still there for Linux/QtCreator users.
        ./macos/run_zod.sh                 # original campaign, 800x600 window, you = red vs blue bot
        ./macos/run_zod.sh -o              # same, without OpenGL
        ./macos/run_zod.sh -h              # all command line options
-       EDITOR=1 ./macos/run_zod.sh -f blank_maps/level_blank_01.map   # map editor
+       ./macos/run_zod.sh --editor -f blank_maps/level_blank_01.map   # map editor
 
-   The game loads assets relative to bin/, and run_zod.sh starts it from there.
-   To run it by hand:  cd bin && ../build/zod_engine -l map_list.txt -w
+   The game data lives in bin/. run_zod.sh starts the programs from there, so
+   relative map paths are relative to bin/. You can also run build/zod_engine
+   or build/zod_map_editor directly from any directory; they switch to bin/
+   themselves when assets/ isn't in the current directory.
 
 Notes:
 * SDL 1.2 comes from Homebrew's "sdl12-compat", which runs on SDL2 and

@@ -45,6 +45,7 @@ TCHAR *optarg;
 
 #include <lib_qZod_DnSeparate/common.h>
 #include <lib_qZod_DnSeparate/zsdl.h>
+#include <lib_qZod_DnSeparate/zdata_dir.h>
 #include <lib_qZod_DnMap/qzod_map.h>
 
 #include <lib_qZod_DnObjects/zobject.h>
@@ -264,6 +265,10 @@ int main(int argc, char **argv)
 
     //check if args ok
     if(!checkargs(argv[0])) return 0;
+
+    //the map file is relative to where we were started, the assets to bin/
+    filename = zod_absolute_path(filename);
+    zod_enter_data_dir();
 
     //init SDL
     SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO);

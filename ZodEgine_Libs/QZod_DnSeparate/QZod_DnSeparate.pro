@@ -62,6 +62,7 @@ HEADERS += \
     zpsettings.h \
     zsdl.h \
     zsdl_opengl.h \
+    zdata_dir.h \
     ztime.h
 
 
