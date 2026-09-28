@@ -199,6 +199,8 @@ pub fn build(b: *std.Build) void {
     test_mod.addImport("c", c_mod);
     linkEngineLibraries(test_mod, sdl, use_opengl, os_tag);
     const run_tests = b.addRunArtifact(b.addTest(.{ .root_module = test_mod }));
+    // Tests may read game data files relative to the repository root.
+    run_tests.setCwd(b.path("."));
     b.step("test", "Run the unit tests of the Zig modules").dependOn(&run_tests.step);
 
     // `zig build run` / `zig build run-editor`: the game loads assets

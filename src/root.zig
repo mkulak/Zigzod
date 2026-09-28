@@ -14,6 +14,8 @@ comptime {
 }
 
 test {
+    _ = @import("game.zig");
+    _ = @import("net.zig");
     _ = @import("common.zig");
     _ = @import("ztime.zig");
     _ = @import("zencrypt_aes.zig");
