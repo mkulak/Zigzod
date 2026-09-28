@@ -868,14 +868,7 @@ pub const Object = struct {
                 },
                 .repair, .robot_factory, .vehicle_factory => fillImpassable(grid, tx, ty, o.width, o.height),
                 // Only the railings; the deck is passable while the bridge stands.
-                .bridge_vert => for (0..@intCast(o.height)) |i| {
-                    grid.setImpassable(tx, ty + @as(i32, @intCast(i)), true, false);
-                    grid.setImpassable(tx + 3, ty + @as(i32, @intCast(i)), true, false);
-                },
-                .bridge_horz => for (0..@intCast(o.width)) |i| {
-                    grid.setImpassable(tx + @as(i32, @intCast(i)), ty, true, false);
-                    grid.setImpassable(tx + @as(i32, @intCast(i)), ty + 3, true, false);
-                },
+                .bridge_vert, .bridge_horz => bridgeLines(grid, o, b.type == .bridge_vert, tx, ty, &.{ 0, 3 }, true),
             },
             .item => |i| switch (i) {
                 .rock => grid.setImpassable(tx, ty + 2, true, true),
@@ -909,18 +902,21 @@ pub const Object = struct {
         const tx = @divTrunc(o.x, 16);
         const ty = @divTrunc(o.y, 16);
         switch (b.type) {
-            .bridge_vert => for (0..@intCast(o.height)) |i| {
-                grid.setImpassable(tx + 1, ty + @as(i32, @intCast(i)), destroyed, false);
-                grid.setImpassable(tx + 2, ty + @as(i32, @intCast(i)), destroyed, false);
-            },
-            .bridge_horz => for (0..@intCast(o.width)) |i| {
-                grid.setImpassable(tx + @as(i32, @intCast(i)), ty + 1, destroyed, false);
-                grid.setImpassable(tx + @as(i32, @intCast(i)), ty + 2, destroyed, false);
-            },
+            .bridge_vert, .bridge_horz => bridgeLines(grid, o, b.type == .bridge_vert, tx, ty, &.{ 1, 2 }, destroyed),
             else => {},
         }
     }
 };
+
+/// Lines along a bridge (columns of a vertical one, rows of a horizontal
+/// one), at the given offsets across it.
+fn bridgeLines(grid: *pathfinding.Grid, o: *const Object, vertical: bool, tx: i32, ty: i32, lines: []const i32, impassable: bool) void {
+    const length = if (vertical) o.height else o.width;
+    var i: i32 = 0;
+    while (i < length) : (i += 1) for (lines) |l| {
+        if (vertical) grid.setImpassable(tx + l, ty + i, impassable, false) else grid.setImpassable(tx + i, ty + l, impassable, false);
+    };
+}
 
 fn fillImpassable(grid: *pathfinding.Grid, tx: i32, ty: i32, w: i32, h: i32) void {
     var i: i32 = 0;

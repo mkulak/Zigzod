@@ -3,6 +3,9 @@
 //! owner's color (from ZMap in QZod_DnMap).
 
 const std = @import("std");
+const tiles_mod = @import("../game/tiles.zig");
+const Tile = tiles_mod.Tile;
+const Area = tiles_mod.Area;
 const k = @import("../game/constants.zig");
 const mapfmt = @import("../game/map.zig");
 const gfx = @import("gfx.zig");
@@ -85,8 +88,7 @@ pub const Terrain = struct {
     sheet: Image,
     palette: *const mapfmt.Palette,
     planet: k.Planet,
-    width: u32,
-    height: u32,
+    area: Area,
     /// The whole map; craters are stamped onto it.
     ground: Image,
     /// Current tile of each map tile (animations change them).
@@ -115,8 +117,7 @@ pub const Terrain = struct {
                 .sheet = sheets.planets[m.header.terrain],
                 .palette = palette,
                 .planet = m.planet(),
-                .width = m.header.width,
-                .height = m.header.height,
+                .area = .{ .w = m.header.width, .h = m.header.height },
                 .ground = ground,
                 .tiles = try gpa.dupe(u16, m.tiles),
                 .stamped = &.{},
@@ -128,24 +129,26 @@ pub const Terrain = struct {
 
         for (palette, 0..) |info, i| {
             if (!info.is_usable) continue;
-            if (info.is_water and !info.is_effect) try t.water_tiles.append(gpa, @intCast(i));
-            if (info.is_water_effect) try t.ripple_tiles.append(gpa, @intCast(i));
+            const sheet_tile: u16 = @intCast(i);
+            if (info.is_water and !info.is_effect) try t.water_tiles.append(gpa, sheet_tile);
+            if (info.is_water_effect) try t.ripple_tiles.append(gpa, sheet_tile);
         }
 
-        for (t.tiles, 0..) |*tl, i| {
+        for (t.tiles, 0..) |*tl, n| {
+            const i: u32 = @intCast(n);
             const info = palette[tl.*];
             if (!info.is_usable) continue;
             // Desert maps start with calm water.
             if (t.planet == .desert and info.is_water and info.is_effect and t.water_tiles.items.len > 0) {
                 tl.* = t.water_tiles.items[rng.uintLessThan(usize, t.water_tiles.items.len)];
-                try t.water.append(gpa, .{ .tile = @intCast(i) });
+                try t.water.append(gpa, .{ .tile = i });
                 continue;
             }
-            if (info.is_effect) try t.animating.append(gpa, .{ .tile = @intCast(i) });
-            if (info.is_water and !info.is_effect) try t.water.append(gpa, .{ .tile = @intCast(i) });
+            if (info.is_effect) try t.animating.append(gpa, .{ .tile = i });
+            if (info.is_water and !info.is_effect) try t.water.append(gpa, .{ .tile = i });
         }
 
-        for (t.tiles, 0..) |_, i| t.drawTile(t.ground, @intCast(i), 0, 0);
+        for (0..t.area.count()) |i| t.drawTile(t.ground, @intCast(i), 0, 0);
         try t.findMarkers(m);
         return t;
     }
@@ -167,7 +170,8 @@ pub const Terrain = struct {
     }
 
     fn tilePos(t: *const Terrain, i: u32) [2]i32 {
-        return .{ @intCast((i % t.width) * tile), @intCast((i / t.width) * tile) };
+        const at = t.area.tile(i);
+        return .{ at.x * tile, at.y * tile };
     }
 
     fn drawTile(t: *const Terrain, dst: Image, i: u32, dx: i32, dy: i32) void {
@@ -178,25 +182,29 @@ pub const Terrain = struct {
     /// Markers along each zone's border, on passable tiles.
     fn findMarkers(t: *Terrain, m: *const mapfmt.Map) !void {
         for (m.zones, 0..) |z, zi| {
-            var edge: std.ArrayList([2]u32) = .empty;
+            var edge: std.ArrayList(Tile) = .empty;
             defer edge.deinit(t.gpa);
-            var j: u32 = 1;
-            while (j + 1 < z.w) : (j += 1) {
-                try edge.append(t.gpa, .{ z.x + j, z.y });
-                try edge.append(t.gpa, .{ z.x + j, z.y + z.h - 1 });
+            const x0: i32 = z.x;
+            const y0: i32 = z.y;
+            const x1 = x0 + z.w - 1;
+            const y1 = y0 + z.h - 1;
+            var j: i32 = 1;
+            while (x0 + j < x1) : (j += 1) {
+                try edge.append(t.gpa, .{ .x = x0 + j, .y = y0 });
+                try edge.append(t.gpa, .{ .x = x0 + j, .y = y1 });
             }
             j = 0;
-            while (j < z.h) : (j += 1) {
-                try edge.append(t.gpa, .{ z.x, z.y + j });
-                try edge.append(t.gpa, .{ z.x + z.w - 1, z.y + j });
+            while (y0 + j <= y1) : (j += 1) {
+                try edge.append(t.gpa, .{ .x = x0, .y = y0 + j });
+                try edge.append(t.gpa, .{ .x = x1, .y = y0 + j });
             }
             for (edge.items) |e| {
-                if (e[0] >= t.width or e[1] >= t.height) continue;
-                const info = t.palette[t.tiles[e[1] * t.width + e[0]]];
+                const i = t.area.index(e) orelse continue;
+                const info = t.palette[t.tiles[i]];
                 if (!info.is_passable) continue;
                 try t.markers.append(t.gpa, .{
-                    .x = @intCast(e[0] * tile + 6),
-                    .y = @intCast(e[1] * tile + 6),
+                    .x = e.x * tile + 6,
+                    .y = e.y * tile + 6,
                     .zone = zi,
                     .water = info.is_water,
                 });
@@ -273,17 +281,23 @@ pub const Terrain = struct {
     }
 
     fn markStamped(t: *Terrain, x: i32, y: i32, w: i32, h: i32) void {
-        const sx: u32 = @intCast(std.math.clamp(@divFloor(x, tile), 0, @as(i32, @intCast(t.width))));
-        const sy: u32 = @intCast(std.math.clamp(@divFloor(y, tile), 0, @as(i32, @intCast(t.height))));
-        const ex: u32 = @intCast(std.math.clamp(@divFloor(x + w - 1, tile) + 1, 0, @as(i32, @intCast(t.width))));
-        const ey: u32 = @intCast(std.math.clamp(@divFloor(y + h - 1, tile) + 1, 0, @as(i32, @intCast(t.height))));
-        for (sy..ey) |ty| @memset(t.stamped[ty * t.width + sx .. ty * t.width + ex], true);
+        const first = Tile.at(x, y);
+        const last = Tile.at(x + w - 1, y + h - 1);
+        if (last.x < 0 or last.y < 0 or first.x >= t.area.w or first.y >= t.area.h) return;
+        const from = t.area.clamp(first);
+        const to = t.area.clamp(last);
+        var ty = from.y;
+        while (ty <= to.y) : (ty += 1) {
+            const row_start = t.area.index(.{ .x = from.x, .y = ty }).?;
+            const row_end = t.area.index(.{ .x = to.x, .y = ty }).?;
+            @memset(t.stamped[row_start .. row_end + 1], true);
+        }
     }
 
     fn craterType(t: *const Terrain, tx: i32, ty: i32) ?usize {
-        if (tx < 0 or ty < 0 or tx >= t.width or ty >= t.height) return null;
-        const ct = t.palette[t.tiles[@as(usize, @intCast(ty)) * t.width + @as(usize, @intCast(tx))]].crater_type;
-        return if (ct >= 0 and ct < max_crater_types) @intCast(ct) else null;
+        const i = t.area.index(.{ .x = tx, .y = ty }) orelse return null;
+        const ct = std.math.cast(usize, t.palette[t.tiles[i]].crater_type) orelse return null;
+        return if (ct < max_crater_types) ct else null;
     }
 
     fn craterImages(t: *const Terrain, crater_type: ?usize, big: bool) []const Image {
@@ -292,7 +306,7 @@ pub const Terrain = struct {
     }
 
     fn isStamped(t: *const Terrain, tx: i32, ty: i32) bool {
-        return t.stamped[@as(usize, @intCast(ty)) * t.width + @as(usize, @intCast(tx))];
+        return t.stamped[t.area.index(.{ .x = tx, .y = ty }).?];
     }
 
     /// Maybe (with `chance`) leave a crater at pixel (x, y): a big one
@@ -302,8 +316,8 @@ pub const Terrain = struct {
         var big = big_wanted;
         var tx = @divFloor(if (big) x - 8 else x, tile);
         var ty = @divFloor(if (big) y - 8 else y, tile);
-        if (tx < 0 or ty < 0 or tx >= t.width or ty >= t.height) return;
-        if (tx + 1 >= t.width or ty + 1 >= t.height) big = false;
+        if (!t.area.contains(.{ .x = tx, .y = ty })) return;
+        if (!t.area.contains(.{ .x = tx + 1, .y = ty + 1 })) big = false;
 
         const ct = t.craterType(tx, ty);
         if (big and t.craterImages(ct, true).len == 0) big = false;

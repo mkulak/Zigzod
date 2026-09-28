@@ -14,6 +14,7 @@
 const std = @import("std");
 const k = @import("constants.zig");
 const mapfmt = @import("map.zig");
+const Area = @import("tiles.zig").Area;
 
 pub const Point = struct { x: i32, y: i32 };
 
@@ -34,8 +35,7 @@ const Tile = struct {
 };
 
 pub const Grid = struct {
-    w: u16,
-    h: u16,
+    area: Area,
     tiles: []Tile,
     /// Connected areas per unit kind; paths never cross regions.
     robot_region: []i32,
@@ -55,7 +55,7 @@ pub const Grid = struct {
         const flood_queue = try gpa.alloc(u32, n);
         @memset(robot_region, 0);
         @memset(vehicle_region, 0);
-        return .{ .w = w, .h = h, .tiles = tiles, .robot_region = robot_region, .vehicle_region = vehicle_region, .flood_queue = flood_queue };
+        return .{ .area = .{ .w = w, .h = h }, .tiles = tiles, .robot_region = robot_region, .vehicle_region = vehicle_region, .flood_queue = flood_queue };
     }
 
     /// Grid for a map's terrain (before any objects are placed).
@@ -65,7 +65,8 @@ pub const Grid = struct {
         for (map.tiles, 0..) |t, i| {
             const info = palette[t];
             const kind: TileKind = if (!info.is_passable) .impassable else if (info.is_water) .water else if (info.is_road) .road else .normal;
-            g.setTileKind(@intCast(i % g.w), @intCast(i / g.w), kind);
+            const at = g.area.tile(i);
+            g.setTileKind(at.x, at.y, kind);
         }
         g.computeWideWeights();
         g.rebuildRegions();
@@ -80,13 +81,12 @@ pub const Grid = struct {
         g.* = undefined;
     }
 
-    fn index(g: *const Grid, tx: i32, ty: i32) ?usize {
-        if (!g.onMap(tx, ty)) return null;
-        return @as(usize, @intCast(ty)) * g.w + @as(usize, @intCast(tx));
+    fn index(g: *const Grid, tx: i32, ty: i32) ?u32 {
+        return g.area.index(.{ .x = tx, .y = ty });
     }
 
     pub fn onMap(g: *const Grid, tx: i32, ty: i32) bool {
-        return tx >= 0 and ty >= 0 and tx < g.w and ty < g.h;
+        return g.area.contains(.{ .x = tx, .y = ty });
     }
 
     pub fn setTileKind(g: *Grid, tx: i32, ty: i32, kind: TileKind) void {
@@ -110,18 +110,18 @@ pub const Grid = struct {
 
     /// Vehicles occupy 2x2 tiles: their costs are the sum over that area.
     pub fn computeWideWeights(g: *Grid) void {
-        for (0..g.h) |ty| for (0..g.w) |tx| {
+        for (g.tiles, 0..) |*t, ti| {
+            const at = g.area.tile(ti);
             var side: u32 = 0;
             var diag: u32 = 0;
-            for ([_][2]usize{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 }, .{ 1, 1 } }) |d| {
-                const i = g.index(@intCast(tx + d[0]), @intCast(ty + d[1])) orelse continue;
+            for ([_][2]i32{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 }, .{ 1, 1 } }) |d| {
+                const i = g.index(at.x + d[0], at.y + d[1]) orelse continue;
                 side += g.tiles[i].side_weight;
                 diag += g.tiles[i].diag_weight;
             }
-            const t = &g.tiles[ty * g.w + tx];
             t.wide_side_weight = side;
             t.wide_diag_weight = diag;
-        };
+        }
     }
 
     /// Mark a tile blocked (or free again) by an object. `destroyable`
@@ -153,16 +153,16 @@ pub const Grid = struct {
     /// If the pixel rectangle overlaps a blocked tile (or leaves the map),
     /// return that tile's top-left pixel.
     pub fn withinImpassable(g: *const Grid, x: i32, y: i32, w: i32, h: i32, is_robot: bool) ?Point {
-        const width_pix = @as(i32, g.w) * k.tile_size;
-        const height_pix = @as(i32, g.h) * k.tile_size;
+        const width_pix = @as(i32, g.area.w) * k.tile_size;
+        const height_pix = @as(i32, g.area.h) * k.tile_size;
         // Off the map counts as blocked (with no particular tile).
         if (x < 0 or y < 0 or x + w >= width_pix or y + h >= height_pix) return .{ .x = x, .y = y };
 
         const layer: Layer = if (is_robot) .robot else .vehicle;
         const tx = x >> 4;
         const ty = y >> 4;
-        const tex = @min(tx + (w >> 4) + @intFromBool(@mod(w, 16) != 0), g.w - 1);
-        const tey = @min(ty + (h >> 4) + @intFromBool(@mod(h, 16) != 0), g.h - 1);
+        const tex = @min(tx + (w >> 4) + @intFromBool(@mod(w, 16) != 0), g.area.w - 1);
+        const tey = @min(ty + (h >> 4) + @intFromBool(@mod(h, 16) != 0), g.area.h - 1);
         var i = tx;
         while (i <= tex) : (i += 1) {
             var j = ty;
@@ -190,22 +190,20 @@ pub const Grid = struct {
     fn floodRegions(g: *Grid, layer: Layer, region: []i32) void {
         for (region, g.tiles) |*r, t| r.* = if (t.passable.contains(layer)) -1 else -2;
         var next_region: i32 = 0;
-        for (0..region.len) |start| {
-            if (region[start] != -1) continue;
+        for (region, 0..) |*r, start| {
+            if (r.* != -1) continue;
             // Breadth-first fill; every tile is queued at most once.
-            region[start] = next_region;
+            r.* = next_region;
             g.flood_queue[0] = @intCast(start);
             var head: usize = 0;
             var tail: usize = 1;
             while (head < tail) : (head += 1) {
-                const i = g.flood_queue[head];
-                const tx: i32 = @intCast(i % g.w);
-                const ty: i32 = @intCast(i / g.w);
+                const at = g.area.tile(g.flood_queue[head]);
                 for ([_][2]i32{ .{ -1, 0 }, .{ 1, 0 }, .{ 0, -1 }, .{ 0, 1 } }) |d| {
-                    const ni = g.index(tx + d[0], ty + d[1]) orelse continue;
+                    const ni = g.index(at.x + d[0], at.y + d[1]) orelse continue;
                     if (region[ni] != -1) continue;
                     region[ni] = next_region;
-                    g.flood_queue[tail] = @intCast(ni);
+                    g.flood_queue[tail] = ni;
                     tail += 1;
                 }
             }
@@ -301,7 +299,7 @@ pub const Grid = struct {
             // No cutting corners diagonally.
             return p(g, layer, ex, sy) and p(g, layer, sx, ey);
         }
-        if (ex + 1 >= g.w or ey + 1 >= g.h) return false;
+        if (ex + 1 >= g.area.w or ey + 1 >= g.area.h) return false;
         if (!(p(g, layer, ex, ey) and p(g, layer, ex + 1, ey) and p(g, layer, ex, ey + 1) and p(g, layer, ex + 1, ey + 1))) return false;
         if (ex == sx or ey == sy) return true;
         // The 2x2 body must not clip the corner tiles it sweeps past.
@@ -367,15 +365,17 @@ pub const Grid = struct {
         const start = g.index(start_x, start_y).?;
         const goal = g.index(end_x, end_y).?;
         cost[start] = 0;
-        parent[start] = @intCast(start);
-        try open.push(gpa, .{ .f = heuristic(start_x, start_y, end_x, end_y), .tile = @intCast(start) });
+        parent[start] = start;
+        try open.push(gpa, .{ .f = heuristic(start_x, start_y, end_x, end_y), .tile = start });
 
         while (open.pop()) |cur| {
             if (closed.isSet(cur.tile)) continue;
             if (cur.tile == goal) break;
             closed.set(cur.tile);
-            const cx: i32 = @intCast(cur.tile % g.w);
-            const cy: i32 = @intCast(cur.tile / g.w);
+            const cx, const cy = blk: {
+                const at = g.area.tile(cur.tile);
+                break :blk .{ at.x, at.y };
+            };
             var dy: i32 = -1;
             while (dy <= 1) : (dy += 1) {
                 var dx: i32 = -1;
@@ -396,7 +396,7 @@ pub const Grid = struct {
                     if (new_cost >= cost[ni]) continue;
                     cost[ni] = new_cost;
                     parent[ni] = cur.tile;
-                    try open.push(gpa, .{ .f = new_cost + heuristic(nx, ny, end_x, end_y), .tile = @intCast(ni) });
+                    try open.push(gpa, .{ .f = new_cost + heuristic(nx, ny, end_x, end_y), .tile = ni });
                 }
             }
         }
@@ -406,7 +406,7 @@ pub const Grid = struct {
         // direction changes.
         var tiles: std.ArrayList(u32) = .empty;
         defer tiles.deinit(gpa);
-        var i: u32 = @intCast(goal);
+        var i: u32 = goal;
         while (true) {
             try tiles.append(gpa, i);
             if (i == start) break;
@@ -419,7 +419,8 @@ pub const Grid = struct {
                 const next = tiles.items[j + 1];
                 if (@as(i64, ti) - prev == @as(i64, next) - ti) continue; // straight on
             }
-            try path.append(gpa, .{ .x = @intCast(ti % g.w), .y = @intCast(ti / g.w) });
+            const at = g.area.tile(ti);
+            try path.append(gpa, .{ .x = at.x, .y = at.y });
         }
     }
 
@@ -433,7 +434,7 @@ pub const Grid = struct {
     /// positions (units don't engage through rocks and the like).
     pub fn engageBarrierBetween(g: *const Grid, x1: i32, y1: i32, x2: i32, y2: i32) bool {
         inline for (.{ .{ x1, y1, x2, y2 }, .{ x2, y2, x1, y1 } }) |l| {
-            var line = Line.init(l[0] >> 4, l[1] >> 4, l[2] >> 4, l[3] >> 4, g.w, g.h);
+            var line = Line.init(l[0] >> 4, l[1] >> 4, l[2] >> 4, l[3] >> 4, g.area.w, g.area.h);
             while (line.next()) |p| if (g.hasDestroyableBarrier(p.x, p.y)) return true;
         }
         return false;
@@ -456,21 +457,19 @@ pub const Line = struct {
     /// An empty line if either end is off the (w x h) map.
     pub fn init(sx: i32, sy: i32, ex: i32, ey: i32, w: i32, h: i32) Line {
         if (sx < 0 or sy < 0 or sx >= w or sy >= h or ex < 0 or ey < 0 or ex >= w or ey >= h) return .{};
-        const dx = @abs(ex - sx) * 2;
-        const dy = @abs(ey - sy) * 2;
-        const dxi: i32 = @intCast(dx);
-        const dyi: i32 = @intCast(dy);
+        const dx: i32 = 2 * (if (ex > sx) ex - sx else sx - ex);
+        const dy: i32 = 2 * (if (ey > sy) ey - sy else sy - ey);
         return .{
             .valid = true,
             .ex = ex,
             .ey = ey,
             .nx = sx,
             .ny = sy,
-            .dx = dxi,
-            .dy = dyi,
+            .dx = dx,
+            .dy = dy,
             .step_x = if (ex < sx) -1 else 1,
             .step_y = if (ey < sy) -1 else 1,
-            .fraction = if (dyi > dxi) dxi * 2 - dyi else dyi * 2 - dxi,
+            .fraction = if (dy > dx) dx * 2 - dy else dy * 2 - dx,
         };
     }
 
@@ -616,7 +615,9 @@ test "every shipped map builds a grid" {
     const a = first.?;
     const b = last.?;
     if (g.robot_region[a] == g.robot_region[b]) {
-        const path = try g.findPath(gpa, @intCast(a % g.w * 16 + 8), @intCast(a / g.w * 16 + 8), @intCast(b % g.w * 16 + 8), @intCast(b / g.w * 16 + 8), true, false);
+        const from = g.area.tile(a).center();
+        const to = g.area.tile(b).center();
+        const path = try g.findPath(gpa, from[0], from[1], to[0], to[1], true, false);
         if (path) |p| gpa.free(p);
     }
 }

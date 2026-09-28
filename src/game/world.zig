@@ -29,7 +29,7 @@ pub const Audience = union(enum) {
     all,
     team: k.Team,
     /// A connection id (see server.zig).
-    player: u32,
+    player: i32,
 };
 
 pub const Outgoing = struct {

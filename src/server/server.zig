@@ -513,7 +513,7 @@ pub const Server = struct {
     }
 
     fn sendPlayerList(s: *Server, to: *const Player) Error!void {
-        const audience: Audience = .{ .player = @intCast(to.id) };
+        const audience: Audience = .{ .player = to.id };
         try s.send(audience, .clear_player_list, &.{});
         for (s.players.items) |p| {
             try s.sendPacket(audience, .add_lplayer, protocol.AddRemovePlayer{ .p_id = p.id });
@@ -529,8 +529,8 @@ pub const Server = struct {
     pub fn changePlayerTeam(s: *Server, p: *Player, team: k.Team) Error!void {
         p.team = team;
         try s.relayTeam(p, .all);
-        try s.sendPacket(.{ .player = @intCast(p.id) }, .set_team, protocol.Int{ .value = @intFromEnum(team) });
-        try s.newsFmt(.{ .player = @intCast(p.id) }, "you have been set to the {s} team", .{team.name()});
+        try s.sendPacket(.{ .player = p.id }, .set_team, protocol.Int{ .value = @intFromEnum(team) });
+        try s.newsFmt(.{ .player = p.id }, "you have been set to the {s} team", .{team.name()});
     }
 
     // -----------------------------------------------------------------------
@@ -608,7 +608,7 @@ pub const Server = struct {
     // -----------------------------------------------------------------------
 
     fn handle(s: *Server, p: *Player, frame: net.conn.Frame) Error!void {
-        const me: Audience = .{ .player = @intCast(p.id) };
+        const me: Audience = .{ .player = p.id };
         const data = frame.payload;
         const w = &s.world;
         switch (frame.id) {
@@ -753,7 +753,7 @@ pub const Server = struct {
     /// Ignored players (stopped bots) may not command units.
     fn denied(s: *Server, p: *const Player, what: []const u8) Error!bool {
         if (!p.ignored) return false;
-        try s.newsFmt(.{ .player = @intCast(p.id) }, "{s} error: player currently ignored", .{what});
+        try s.newsFmt(.{ .player = p.id }, "{s} error: player currently ignored", .{what});
         return true;
     }
 
@@ -831,7 +831,7 @@ pub const Server = struct {
     /// Start a vote (or just do it when no vote is needed). Returns whether
     /// a vote was started.
     pub fn startVote(s: *Server, kind: VoteType, value: i32, p: ?*Player) Error!bool {
-        const me: ?Audience = if (p) |pl| .{ .player = @intCast(pl.id) } else null;
+        const me: ?Audience = if (p) |pl| .{ .player = pl.id } else null;
         switch (kind) {
             .change_map => if (value < 0 or value >= s.selectable_maps.items.len) {
                 if (me) |a| try s.news(a, "invalid map choice, please type /listmaps");
@@ -892,7 +892,7 @@ pub const Server = struct {
 
     fn castVote(s: *Server, p: *Player, choice: k.VoteChoice) Error!void {
         if (s.vote == null) return;
-        const me: Audience = .{ .player = @intCast(p.id) };
+        const me: Audience = .{ .player = p.id };
         if (p.vote != .none) return s.news(me, "you have already voted");
         p.vote = choice;
         try s.relayVoteChoice(p, .all);

@@ -157,6 +157,11 @@ const Selector = struct {
     }
 };
 
+/// Where the n-th queued unit's line is in the expanded window.
+fn queueRowY(n: usize) i32 {
+    return 22 + @as(i32, @intCast(n)) * 14;
+}
+
 const Pressed = union(enum) {
     button: ButtonKind,
     selector_up: u1,
@@ -341,14 +346,14 @@ pub const Production = struct {
             if (!p.buttonActive(kind, st)) continue;
             if (hit(images.button(kind, false), pos[0], pos[1], lx, ly)) p.pressed = .{ .button = kind };
         }
-        for (p.selectors, 0..) |s, i| {
+        for (p.selectors, [_]u1{ 0, 1 }) |s, i| {
             if (i == 1 and !p.expanded) continue;
             if (!s.choosing(st)) continue;
-            if (hit(images.button(.up, false), s.x + Selector.up[0], s.y + Selector.up[1], lx, ly)) p.pressed = .{ .selector_up = @intCast(i) };
-            if (hit(images.button(.down, false), s.x + Selector.down[0], s.y + Selector.down[1], lx, ly)) p.pressed = .{ .selector_down = @intCast(i) };
+            if (hit(images.button(.up, false), s.x + Selector.up[0], s.y + Selector.up[1], lx, ly)) p.pressed = .{ .selector_up = i };
+            if (hit(images.button(.down, false), s.x + Selector.down[0], s.y + Selector.down[1], lx, ly)) p.pressed = .{ .selector_down = i };
         }
         if (p.expanded) for (0..b.queue.items.len) |i| {
-            if (hit(images.button(.object_name, false), 177, 22 + @as(i32, @intCast(i)) * 14, lx, ly)) p.pressed = .{ .queue_item = i };
+            if (hit(images.button(.object_name, false), 177, queueRowY(i), lx, ly)) p.pressed = .{ .queue_item = i };
         };
     }
 
@@ -396,13 +401,13 @@ pub const Production = struct {
             },
             .selector_up => |i| p.turn(i, b, 1),
             .selector_down => |i| p.turn(i, b, -1),
-            .queue_item => |i| if (i < b.queue.items.len and hit(images.button(.object_name, true), 177, 22 + @as(i32, @intCast(i)) * 14, lx, ly)) {
+            .queue_item => |i| if (i < b.queue.items.len and hit(images.button(.object_name, true), 177, queueRowY(i), lx, ly)) {
                 return .{ .dequeue = .{ .index = i, .unit = b.queue.items[i] } };
             },
             .pick => {},
         };
         // Clicking a portrait opens the full list.
-        for (p.selectors, 0..) |s, i| {
+        for (p.selectors, [_]u1{ 0, 1 }) |s, i| {
             if (i == 1 and !p.expanded) continue;
             if (s.choosing(st) and s.inPortrait(lx, ly) and pressed == null) {
                 p.picker = .init(@intCast(i), options(b), p.x + s.x + 24, p.y + s.y + 21, map.widthPixels(), map.heightPixels());
@@ -481,7 +486,7 @@ pub const Production = struct {
 
         // The queue.
         if (p.expanded) for (b.queue.items, 0..) |u, i| {
-            const qy = y + 22 + @as(i32, @intCast(i)) * 14;
+            const qy = y + queueRowY(i);
             const down = if (p.pressed) |pr| std.meta.eql(pr, Pressed{ .queue_item = i }) else false;
             cv.draw(images.button(.object_name, down), x + 177, qy);
             const name = unitName(u);
@@ -496,14 +501,14 @@ pub const Production = struct {
         const health_text = fit(&buf, "{d}%", .{health});
         small.draw(cv, health_text, x + 86 - (small.width(health_text) >> 1), y + 6);
 
-        for (p.selectors, 0..) |s, i| {
+        for (p.selectors, [_]u1{ 0, 1 }) |s, i| {
             if (i == 1 and !p.expanded) continue;
             const sx = x + s.x;
             const sy = y + s.y;
             if (s.choosing(st)) {
                 for ([_]struct { ButtonKind, [2]i32, Pressed }{
-                    .{ .up, Selector.up, .{ .selector_up = @intCast(i) } },
-                    .{ .down, Selector.down, .{ .selector_down = @intCast(i) } },
+                    .{ .up, Selector.up, .{ .selector_up = i } },
+                    .{ .down, Selector.down, .{ .selector_down = i } },
                 }) |bt| {
                     const down = if (p.pressed) |pr| std.meta.eql(pr, bt[2]) else false;
                     cv.draw(images.button(bt[0], down), sx + bt[1][0], sy + bt[1][1]);
@@ -516,7 +521,7 @@ pub const Production = struct {
                 const h: i32 = @intFromFloat((1 - done) * @as(f64, @floatFromInt(bar.height())));
                 if (h > 0) cv.drawPart(bar, .{ .x = 0, .y = 0, .w = bar.width(), .h = h }, sx + 50, sy + 2);
             }
-            if (p.selected(@intCast(i), st, b)) |u| {
+            if (p.selected(i, st, b)) |u| {
                 p.drawUnit(cv, world, all, fx, rng, u, o.owner, sx + 24, sy + 21, i == 0);
                 const name = unitName(u);
                 small.draw(cv, name, sx + 25 - (small.width(name) >> 1), sy + 42);

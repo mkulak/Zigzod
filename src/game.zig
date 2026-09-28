@@ -5,6 +5,7 @@ pub const constants = @import("game/constants.zig");
 pub const clock = @import("game/clock.zig");
 pub const settings = @import("game/settings.zig");
 pub const map = @import("game/map.zig");
+pub const tiles = @import("game/tiles.zig");
 pub const pathfinding = @import("game/pathfinding.zig");
 pub const buildlist = @import("game/buildlist.zig");
 pub const object = @import("game/object.zig");

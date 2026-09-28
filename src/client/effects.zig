@@ -320,7 +320,7 @@ const Rocket = struct {
 const Effect = union(enum) {
     bullet: struct { team: k.Team, line: Line },
     /// Lasers and pyro flames.
-    beam: struct { flame: bool, line: Line, img: u8, angle: f64 },
+    beam: struct { flame: bool, line: Line, img: usize, angle: f64 },
     rocket: Rocket,
     /// A fixed animation that plays once (fire bursts, mushrooms, smoke,
     /// robots dying, tank dust).
@@ -431,8 +431,14 @@ pub const Effects = struct {
         fx.spawned.clearRetainingCapacity();
     }
 
-    fn rand(fx: *Effects, n: u32) i32 {
-        return @intCast(fx.rng.uintLessThan(u32, n));
+    /// 0 to n - 1.
+    fn rand(fx: *Effects, n: i32) i32 {
+        return fx.rng.intRangeLessThan(i32, 0, n);
+    }
+
+    /// One of n things (an index).
+    fn pick(fx: *Effects, n: usize) usize {
+        return fx.rng.uintLessThan(usize, n);
     }
 
     /// `min` plus up to `spread - 1` more.
@@ -441,8 +447,8 @@ pub const Effects = struct {
     }
 
     /// `base + (spread - rand(2 * spread))`: a random offset within ±spread.
-    fn around(fx: *Effects, spread: u32) i32 {
-        return @as(i32, @intCast(spread)) - fx.rand(2 * spread);
+    fn around(fx: *Effects, spread: i32) i32 {
+        return spread - fx.rand(2 * spread);
     }
 
     fn add(fx: *Effects, e: Effect) void {
@@ -474,7 +480,7 @@ pub const Effects = struct {
         var line: Line = .init(.of(from_x, from_y), .of(to_x, to_y), 300, fx.time);
         const angle = line.imageAngle();
         line.start = from;
-        fx.add(.{ .beam = .{ .flame = is_flame, .line = line, .img = @intCast(fx.rand(if (is_flame) 4 else 2)), .angle = angle } });
+        fx.add(.{ .beam = .{ .flame = is_flame, .line = line, .img = fx.pick(if (is_flame) 4 else 2), .angle = angle } });
     }
 
     pub fn laser(fx: *Effects, from_x: i32, from_y: i32, to_x: i32, to_y: i32) void {
@@ -507,7 +513,7 @@ pub const Effects = struct {
         switch (kind) {
             .light => {
                 // A muzzle flash; the shell is drawn from its corner.
-                fx.anim(.{ .imgs = fx.s.light_init_fire[@intCast(fx.rand(4))..][0..1], .x = from_x - 8, .y = from_y - 7, .frames = .init(fx.time, 0.02) });
+                fx.anim(.{ .imgs = fx.s.light_init_fire[fx.pick(4)..][0..1], .x = from_x - 8, .y = from_y - 7, .frames = .init(fx.time, 0.02) });
                 offset = .of(-(fx.s.light_bullet.width() >> 1), -(fx.s.light_bullet.height() >> 1));
             },
             .tough => {},
@@ -549,7 +555,7 @@ pub const Effects = struct {
     }
 
     fn pyroFire(fx: *Effects, x: i32, y: i32) void {
-        const kind: usize = @intCast(fx.rand(5));
+        const kind: usize = fx.pick(5);
         const n: usize = if (kind < 3) 4 else 6;
         const first = fx.s.pyro_fire[kind][0];
         fx.anim(.{ .imgs = fx.s.pyro_fire[kind][0..n], .x = x - (first.width() >> 1), .y = y - (first.height() >> 1), .frames = .init(fx.time, 0.06) });
@@ -569,7 +575,7 @@ pub const Effects = struct {
     }
 
     /// A bit of debris flying off a unit.
-    pub fn particle(fx: *Effects, x0: i32, y0: i32, horz: u32, vert: u32) void {
+    pub fn particle(fx: *Effects, x0: i32, y0: i32, horz: i32, vert: i32) void {
         const lifetime = 1.4 + 0.1 * @as(f64, @floatFromInt(fx.rand(10)));
         const x = x0 + fx.rand(8);
         const y = y0 + fx.rand(24);
@@ -605,9 +611,9 @@ pub const Effects = struct {
         fx.add(.{ .robot_flip = .{ .team = team, .arc = .init(.of(x, y), to, lifetime, rise, fx.time), .frames = .init(fx.time, 0.05) } });
     }
 
-    fn rockParticle(fx: *Effects, x0: i32, y0: i32, mid: bool, horz: u32, vert: u32) void {
+    fn rockParticle(fx: *Effects, x0: i32, y0: i32, mid: bool, horz: i32, vert: i32) void {
         const p = @intFromEnum(fx.planet);
-        const imgs: []const Image = if (!mid) &fx.s.rock_small[p] else &fx.s.rock_mid[@intCast(fx.rand(2))][p];
+        const imgs: []const Image = if (!mid) &fx.s.rock_small[p] else &fx.s.rock_mid[fx.pick(2)][p];
         const lifetime = 1.1 + 0.1 * @as(f64, @floatFromInt(fx.rand(10)));
         const x = x0 + fx.rand(8);
         const y = y0 + fx.rand(24);
@@ -622,7 +628,7 @@ pub const Effects = struct {
             &fx.s.bridge_debris[p]
         else switch (fx.planet) {
             .city, .desert => &fx.s.rock_large[0][p],
-            else => &fx.s.rock_large[@intCast(fx.rand(2))][p],
+            else => &fx.s.rock_large[fx.pick(2)][p],
         };
         const lifetime = 1.5 + 0.1 * @as(f64, @floatFromInt(fx.rand(10)));
         const x = x0 + fx.rand(8);
@@ -668,7 +674,7 @@ pub const Effects = struct {
     fn wreck(fx: *Effects, kind: WreckKind, img: Image, x: i32, y: i32) void {
         var w: Wreck = .{ .img = img, .x = x, .y = y, .until = fx.time + 5 + @as(f64, @floatFromInt(fx.rand(3))) };
         // Where fires burn on the wreck.
-        const bx: i32, const by: i32, const bw: u32, const bh: u32 = switch (kind) {
+        const bx: i32, const by: i32, const bw: i32, const bh: i32 = switch (kind) {
             .jeep => .{ 5, 14, 22, 10 },
             .launcher => .{ 5, 10, 21, 19 },
             .apc => .{ 5, 8, 18, 20 },
@@ -714,7 +720,7 @@ pub const Effects = struct {
                     else => 2,
                 };
                 if (dirts == 0) continue;
-                const d: usize = @intCast(fx.rand(dirts));
+                const d: usize = fx.pick(dirts);
                 const first = fx.s.tank_dirt[p][d][0];
                 const n: usize = if (fx.planet == .jungle) 6 else 5;
                 fx.addGround(.{ .anim = .{ .imgs = fx.s.tank_dirt[p][d][0..n], .x = pt[0] - (first.width() >> 1), .y = pt[1] - first.height(), .frames = .init(fx.time, 0.15) } });
@@ -725,7 +731,7 @@ pub const Effects = struct {
             if (fx.rand(3) == 0) fx.tankSmoke(cx, cy, direction, true);
             if (fx.rand(16) == 0) {
                 const at = fx.oilCoords(cx, cy, direction, 5, 3, 7);
-                fx.addGround(.{ .anim = .{ .imgs = &fx.s.tank_oil[@intCast(fx.rand(3))], .x = at[0], .y = at[1], .centered = true, .frames = .init(fx.time, 3.0 + 0.1 * @as(f64, @floatFromInt(fx.rand(10)))), .jitter = 1.0 } });
+                fx.addGround(.{ .anim = .{ .imgs = &fx.s.tank_oil[fx.pick(3)], .x = at[0], .y = at[1], .centered = true, .frames = .init(fx.time, 3.0 + 0.1 * @as(f64, @floatFromInt(fx.rand(10)))), .jitter = 1.0 } });
             }
             if (fx.rand(48) == 0) {
                 const at = fx.oilCoords(cx, cy, direction, 3, 5, 11);
@@ -736,7 +742,7 @@ pub const Effects = struct {
     }
 
     /// Where a damaged tank drips oil or scrapes sparks.
-    fn oilCoords(fx: *Effects, cx0: i32, cy0: i32, direction: u3, down: i32, back: i32, spread: u32) [2]i32 {
+    fn oilCoords(fx: *Effects, cx0: i32, cy0: i32, direction: u3, down: i32, back: i32, spread: i32) [2]i32 {
         var cx = cx0;
         var cy = cy0;
         switch (direction) {
@@ -829,7 +835,7 @@ pub const Effects = struct {
 
     /// A random point on `target` (where a bullet hits).
     pub fn pointOn(fx: *Effects, target: *const Object) [2]i32 {
-        return .{ target.x + fx.rand(@intCast(@max(target.width_pix, 1))), target.y + fx.rand(@intCast(@max(target.height_pix, 1))) };
+        return .{ target.x + fx.rand(@max(target.width_pix, 1)), target.y + fx.rand(@max(target.height_pix, 1)) };
     }
 
     /// The server says `o` fired at (x, y) (FireMissile of each unit).
@@ -916,7 +922,7 @@ pub const Effects = struct {
             else if (o.owner != .none) {
                 const team = @intFromEnum(o.owner);
                 const imgs: []const Image = if (fire_death) &fx.s.robot_melt[team] else blk: {
-                    const d: usize = @intCast(fx.rand(4));
+                    const d: usize = fx.pick(4);
                     break :blk fx.s.robot_die[d][team][0..if (d == 3) 8 else 10];
                 };
                 fx.addUnder(.{ .anim = .{ .imgs = imgs, .x = o.x, .y = o.y, .frames = .init(fx.time, 0.16) } });
@@ -997,16 +1003,16 @@ pub const Effects = struct {
         };
         const is_fort = kind == .fort_front or kind == .fort_back;
         for (0..balls + fx.rng.uintLessThan(u32, balls_spread)) |_| {
-            fx.sideExplosion(o.x + box.x + fx.rand(@intCast(box.w)), o.y + box.y + fx.rand(@intCast(box.h)), 1.3);
+            fx.sideExplosion(o.x + box.x + fx.rand(box.w), o.y + box.y + fx.rand(box.h), 1.3);
         }
         for (0..pieces + fx.rng.uintLessThan(u32, pieces_spread)) |_| {
-            const sx = o.x + box.x + fx.rand(@intCast(box.w));
-            const sy = o.y + box.y + fx.rand(@intCast(box.h));
+            const sx = o.x + box.x + fx.rand(box.w);
+            const sy = o.y + box.y + fx.rand(box.h);
             const ex = o.x + (o.width_pix >> 1) + fx.around(200);
             const ey = o.y + (o.height_pix >> 1) + fx.around(200);
             const offset = flight + 0.01 * @as(f64, @floatFromInt(fx.rand(200)));
             const piece: TurretPiece = if (is_fort)
-                @enumFromInt(@intFromEnum(TurretPiece.fort0) + @as(u8, @intCast(fx.rand(5))))
+                @enumFromInt(@intFromEnum(TurretPiece.fort0) + @as(u8, @intCast(fx.pick(5))))
             else if (fx.rand(2) == 0) .building0 else .building1;
             fx.turret(piece, .none, sx, sy, ex, ey, offset);
         }
@@ -1024,7 +1030,7 @@ pub const Effects = struct {
             if (o.y > y + radius or o.y + o.height_pix < y - radius) continue;
             var n = 14 + fx.rng.uintLessThan(u32, @max(amount, 1));
             if (o.kind == .robot) n /= 2;
-            for (0..n) |_| fx.particle(o.x + fx.rand(@intCast(@max(o.width_pix, 1))), o.y + fx.rand(@intCast(@max(o.height_pix, 1))), 25, 25);
+            for (0..n) |_| fx.particle(o.x + fx.rand(@max(o.width_pix, 1)), o.y + fx.rand(@max(o.height_pix, 1)), 25, 25);
         }
     }
 
@@ -1249,7 +1255,7 @@ pub const Effects = struct {
                 const img = if (b.flame) s.flame_bullet[b.img] else s.laser_bullet[b.img];
                 fx.put(cv, view, img, int(at.x), int(at.y), b.angle, 1, false);
                 // Flames flicker.
-                if (b.flame) b.img = @intCast(fx.rand(4));
+                if (b.flame) b.img = fx.pick(4);
             },
             .rocket => |r| {
                 var at = r.line.at(t);
@@ -1340,8 +1346,8 @@ pub fn trackCoords(cx: i32, cy: i32, direction: u3, rng: std.Random) [2][2]i32 {
         3 => .{ .{ cx + 14 + 1, cy + 4 + 4 }, .{ cx + 4 + 1, cy + 14 + 4 } },
         7 => .{ .{ cx - 14, cy - 4 + 3 }, .{ cx - 4, cy - 14 + 3 } },
     };
-    const jx: i32 = @intCast(rng.uintLessThan(u32, 2));
-    const jy: i32 = @intCast(rng.uintLessThan(u32, 2));
+    const jx = rng.intRangeLessThan(i32, 0, 2);
+    const jy = rng.intRangeLessThan(i32, 0, 2);
     for (&p) |*pt| {
         pt[0] += jx;
         pt[1] += jy;
@@ -1383,8 +1389,8 @@ pub const BuildingFires = struct {
         if (f.fires.items.len >= wanted) return;
         const box = effectsBox(o);
         while (f.fires.items.len < wanted) {
-            const x = o.x + box.x + @as(i32, @intCast(rng.uintLessThan(u32, @intCast(box.w))));
-            const y = o.y + box.y + @as(i32, @intCast(rng.uintLessThan(u32, @intCast(box.h))));
+            const x = o.x + box.x + rng.intRangeLessThan(i32, 0, box.w);
+            const y = o.y + box.y + rng.intRangeLessThan(i32, 0, box.h);
             f.fires.append(gpa, .random(x, y, rng, time)) catch return;
         }
         std.mem.sort(Fire, f.fires.items, {}, Fire.lessThan);

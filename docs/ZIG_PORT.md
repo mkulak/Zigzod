@@ -32,6 +32,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       game/constants.zig  enums (teams, unit types, ...) - wire values
       game/settings.zig   unit stats / tunables, also the SET_SETTINGS message
       game/map.zig        .map format, tile properties, zones
+      game/tiles.zig      tile positions and tile numbers
       game/clock.zig      the game clock (pause, speed)
       game/pathfinding.zig  passability grid, regions, A*
       game/buildlist.zig  what each factory can build per level

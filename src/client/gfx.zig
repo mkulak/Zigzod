@@ -67,7 +67,7 @@ pub const Image = struct {
     }
 
     fn len(img: Image) usize {
-        return @as(usize, @intCast(img.w)) * @as(usize, @intCast(img.h));
+        return @intCast(img.w * img.h);
     }
 
     pub fn all(img: Image) []u32 {
@@ -81,7 +81,7 @@ pub const Image = struct {
     /// A new, fully transparent image.
     pub fn create(gpa: std.mem.Allocator, w: i32, h: i32) Error!Image {
         std.debug.assert(w > 0 and h > 0);
-        const pixels = try gpa.alloc(u32, @as(usize, @intCast(w)) * @as(usize, @intCast(h)));
+        const pixels = try gpa.alloc(u32, @intCast(w * h));
         @memset(pixels, 0);
         return .{ .w = w, .h = h, .pixels = pixels.ptr };
     }
@@ -102,7 +102,8 @@ pub const Image = struct {
         var y: i32 = 0;
         while (y < img.h) : (y += 1) {
             const src: [*]const u32 = @ptrCast(@alignCast(base + @as(usize, @intCast(y)) * @as(usize, @intCast(argb.pitch))));
-            @memcpy(img.row(y), src[0..@intCast(img.w)]);
+            const dst = img.row(y);
+            @memcpy(dst, src[0..dst.len]);
         }
         return img;
     }
@@ -135,12 +136,18 @@ pub const Image = struct {
     };
 
     pub fn row(img: Image, y: i32) []u32 {
-        const w: usize = @intCast(img.w);
-        return img.pixels[@as(usize, @intCast(y)) * w ..][0..w];
+        return img.span(y, 0, img.w);
+    }
+
+    /// `n` pixels of row `y` from column `x` (all inside the image).
+    pub fn span(img: Image, y: i32, x: i32, n: i32) []u32 {
+        std.debug.assert(y >= 0 and y < img.h and x >= 0 and n >= 0 and x + n <= img.w);
+        const start: usize = @intCast(y * img.w + x);
+        return img.pixels[start..][0..@intCast(n)];
     }
 
     pub fn pixel(img: Image, x: i32, y: i32) Color {
-        return .fromArgb(img.row(y)[@intCast(x)]);
+        return .fromArgb(img.span(y, x, 1)[0]);
     }
 
     /// A new image of this one turned `angle` degrees counterclockwise and
@@ -177,7 +184,7 @@ pub const Image = struct {
             for (row_out) |*p| {
                 const px: i32 = @as(i16, @truncate(sx >> 16));
                 const py: i32 = @as(i16, @truncate(sy >> 16));
-                p.* = if (px >= 0 and py >= 0 and px < w and py < h) img.row(py)[@intCast(px)] else 0;
+                p.* = if (px >= 0 and py >= 0 and px < w and py < h) img.span(py, px, 1)[0] else 0;
                 sx +%= icos;
                 sy +%= isin;
             }
@@ -193,7 +200,11 @@ pub const Image = struct {
         var y: i32 = 0;
         while (y < out.height()) : (y += 1) {
             const src = img.row(@divTrunc(y * h, out.height()));
-            for (out.row(y), 0..) |*p, x| p.* = src[@intCast(@divTrunc(@as(i32, @intCast(x)) * w, out.width()))];
+            var x: i32 = 0;
+            for (out.row(y)) |*p| {
+                p.* = src[@intCast(@divTrunc(x * w, out.width()))];
+                x += 1;
+            }
         }
         return out;
     }
@@ -219,14 +230,12 @@ pub const Image = struct {
         const at_x = x + from.x - want.x;
         const at_y = y + from.y - want.y;
         const to = (Rect{ .x = at_x, .y = at_y, .w = from.w, .h = from.h }).intersect(dst.bounds()) orelse return;
-        const sx: usize = @intCast(from.x + to.x - at_x);
+        const sx = from.x + to.x - at_x;
         const sy = from.y + to.y - at_y;
-        const dx: usize = @intCast(to.x);
-        const n: usize = @intCast(to.w);
         var j: i32 = 0;
         while (j < to.h) : (j += 1) {
-            const s = src.row(sy + j)[sx..][0..n];
-            const d = dst.row(to.y + j)[dx..][0..n];
+            const s = src.span(sy + j, sx, to.w);
+            const d = dst.span(to.y + j, to.x, to.w);
             if (raw) @memcpy(d, s) else blendRow(d, s);
         }
     }
@@ -249,7 +258,7 @@ pub const Image = struct {
     pub fn fill(img: Image, r: ?Rect, col: Color) void {
         const area = (r orelse img.bounds()).intersect(img.bounds()) orelse return;
         var y = area.y;
-        while (y < area.y + area.h) : (y += 1) @memset(img.row(y)[@intCast(area.x)..][0..@intCast(area.w)], col.argb());
+        while (y < area.y + area.h) : (y += 1) @memset(img.span(y, area.x, area.w), col.argb());
     }
 };
 
@@ -285,14 +294,11 @@ pub const Canvas = struct {
         const visible = to.intersect(cv.clip) orelse return;
         var j: i32 = 0;
         while (j < visible.h) : (j += 1) {
-            const src = img.row(visible.y - to.y + j);
-            const dst = cv.target.row(visible.y + j);
-            var i: i32 = 0;
-            while (i < visible.w) : (i += 1) {
-                const s = src[@intCast(visible.x - to.x + i)];
+            const src = img.span(visible.y - to.y + j, visible.x - to.x, visible.w);
+            const dst = cv.target.span(visible.y + j, visible.x, visible.w);
+            for (src, dst) |s, *d| {
                 const a = ((s >> 24) * alpha) / 255;
                 if (a == 0) continue;
-                const d = &dst[@intCast(visible.x + i)];
                 var r: u32 = (d.* >> 16) & 0xFF;
                 var g: u32 = (d.* >> 8) & 0xFF;
                 var b: u32 = d.* & 0xFF;
@@ -311,14 +317,11 @@ pub const Canvas = struct {
         const visible = to.intersect(cv.clip) orelse return;
         var j: i32 = 0;
         while (j < visible.h) : (j += 1) {
-            const src = img.row(visible.y - to.y + j);
-            const dst = cv.target.row(visible.y + j);
-            var i: i32 = 0;
-            while (i < visible.w) : (i += 1) {
-                const s = src[@intCast(visible.x - to.x + i)];
+            const src = img.span(visible.y - to.y + j, visible.x - to.x, visible.w);
+            const dst = cv.target.span(visible.y + j, visible.x, visible.w);
+            for (src, dst) |s, *d| {
                 const a = ((s >> 24) * alpha) / 255;
                 if (a == 0) continue;
-                const d = &dst[@intCast(visible.x + i)];
                 const sr = (((s >> 16) & 0xFF) * tint.r) / 255;
                 const sg = (((s >> 8) & 0xFF) * tint.g) / 255;
                 const sb = ((s & 0xFF) * tint.b) / 255;
@@ -339,11 +342,10 @@ pub const Canvas = struct {
         const visible = to.intersect(cv.clip) orelse return;
         var j: i32 = 0;
         while (j < visible.h) : (j += 1) {
-            const src = img.row(visible.y - to.y + j);
-            const dst = cv.target.row(visible.y + j);
-            var i: i32 = 0;
-            while (i < visible.w) : (i += 1) {
-                if (src[@intCast(visible.x - to.x + i)] & amask != 0) dst[@intCast(visible.x + i)] = 0xFFFFFFFF;
+            const src = img.span(visible.y - to.y + j, visible.x - to.x, visible.w);
+            const dst = cv.target.span(visible.y + j, visible.x, visible.w);
+            for (src, dst) |s, *d| {
+                if (s & amask != 0) d.* = 0xFFFFFFFF;
             }
         }
     }

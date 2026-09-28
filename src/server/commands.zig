@@ -49,11 +49,11 @@ pub fn run(s: *Server, p: *Player, line: []const u8) Error!void {
 }
 
 fn tell(s: *Server, p: *const Player, text: []const u8) Error!void {
-    try s.news(.{ .player = @intCast(p.id) }, text);
+    try s.news(.{ .player = p.id }, text);
 }
 
 fn tellFmt(s: *Server, p: *const Player, comptime fmt: []const u8, args: anytype) Error!void {
-    try s.newsFmt(.{ .player = @intCast(p.id) }, fmt, args);
+    try s.newsFmt(.{ .player = p.id }, fmt, args);
 }
 
 /// The first comma-separated argument, without leading spaces.
@@ -171,7 +171,7 @@ fn reshuffleTeams(s: *Server, p: *Player, _: []const u8) Error!void {
 }
 
 fn buyRegistration(s: *Server, p: *Player, _: []const u8) Error!void {
-    try s.send(.{ .player = @intCast(p.id) }, .poll_buy_regkey, &.{});
+    try s.send(.{ .player = p.id }, .poll_buy_regkey, &.{});
 }
 
 fn changeSpeed(s: *Server, p: *Player, args: []const u8) Error!void {
@@ -181,7 +181,7 @@ fn changeSpeed(s: *Server, p: *Player, args: []const u8) Error!void {
 }
 
 fn version(s: *Server, p: *Player, _: []const u8) Error!void {
-    try s.relayVersion(.{ .player = @intCast(p.id) });
+    try s.relayVersion(.{ .player = p.id });
 }
 
 test "argument parsing" {
