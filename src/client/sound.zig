@@ -156,6 +156,14 @@ pub const Sounds = struct {
         s.music.load(assets);
     }
 
+    /// Volume in quarters: 0 (off) to 4 (full).
+    pub fn setVolume(s: *Sounds, quarters: u8) void {
+        if (!s.on) return;
+        const q: c_int = @min(quarters, 4);
+        _ = c.Mix_Volume(-1, @divTrunc(128 * q, 4));
+        _ = c.Mix_VolumeMusic(@divTrunc(80 * q, 4));
+    }
+
     fn clearSlots(s: *Sounds) void {
         for (&s.effects) |*slots| slots.* = @splat(.{ .def = .{ .file = "" } });
         s.computer = @splat(.{ .def = .{ .file = "" } });

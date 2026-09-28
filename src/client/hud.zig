@@ -176,6 +176,18 @@ pub const Hud = struct {
     next_alert_speech: f64 = 0,
     last_alert_speech: ?u8 = null,
 
+    /// Our team is out of the game: its units' drivers file past and say
+    /// goodbye, cheering or not.
+    parade: ?Parade = null,
+
+    const Parade = struct {
+        won: bool,
+        team: k.Team,
+        faces: [128]struct { robot: k.Robot, in_vehicle: bool } = undefined,
+        len: usize = 0,
+        next: f64 = 0,
+    };
+
     pub fn init(assets: []const u8, palettes: *const gfx.TeamPalettes, fonts: *const font.Fonts) Hud {
         return .{ .images = .load(assets, palettes), .faces = .load(assets, palettes), .fonts = fonts, .palettes = palettes };
     }
@@ -194,8 +206,41 @@ pub const Hud = struct {
     pub fn reset(h: *Hud) void {
         h.buttons = initialButtons();
         h.alert = null;
+        h.parade = null;
         h.portrait.show(null);
         h.alert_portrait.show(null);
+    }
+
+    /// Start the goodbye parade of `team`'s units.
+    pub fn startParade(h: *Hud, world: *const World, team: k.Team, won: bool) void {
+        var p: Parade = .{ .won = won, .team = team };
+        for (world.objects.items) |o| {
+            if (o.owner != team or p.len == p.faces.len) continue;
+            p.faces[p.len] = switch (o.kind) {
+                .robot => |r| .{ .robot = r, .in_vehicle = false },
+                .vehicle, .cannon => .{ .robot = o.driver_type, .in_vehicle = true },
+                else => continue,
+            };
+            p.len += 1;
+        }
+        h.parade = p;
+    }
+
+    /// The next face every 1.2 seconds.
+    fn updateParade(h: *Hud, real_time: f64, rng: std.Random) void {
+        if (h.parade == null) return;
+        const p = &h.parade.?;
+        if (p.len == 0) {
+            h.parade = null;
+            return;
+        }
+        if (real_time < p.next) return;
+        p.next = real_time + 1.2;
+        p.len -= 1;
+        const f = p.faces[p.len];
+        h.alert_portrait.showRobot(f.robot, p.team, f.in_vehicle);
+        const first: portrait_mod.Anim = if (p.won) .end_won1 else .end_lost1;
+        h.alert_portrait.play(@enumFromInt(@intFromEnum(first) + rng.uintLessThan(u8, 3)), real_time);
     }
 
     /// A new unit is shown: it reports.
@@ -206,7 +251,7 @@ pub const Hud = struct {
 
     /// The alert face says something about `o` (if it isn't talking).
     pub fn speak(h: *Hud, o: *const Object, anim: portrait_mod.Anim, real_time: f64) void {
-        if (h.alert_portrait.busy()) return;
+        if (h.alert_portrait.busy() or h.parade != null) return;
         h.alert_portrait.show(o);
         h.alert_portrait.play(anim, real_time);
     }
@@ -273,6 +318,7 @@ pub const Hud = struct {
     pub fn update(h: *Hud, world: *const World, time: f64, real_time: f64, rng: std.Random) void {
         h.portrait.update(real_time, rng);
         h.alert_portrait.update(real_time, rng);
+        h.updateParade(real_time, rng);
         const id = h.alert orelse return;
         const a = &h.buttons[@intFromEnum(Button.a)];
         if (world.find(id) == null) return h.endAlert();
@@ -439,7 +485,7 @@ pub const Hud = struct {
         }
 
         h.drawClock(cv, v.time, off);
-        const face = if (h.alert_portrait.busy()) &h.alert_portrait else &h.portrait;
+        const face = if (h.alert_portrait.busy() or h.parade != null) &h.alert_portrait else &h.portrait;
         face.draw(cv, &h.faces, h.planet, off[0] + 556, off[1] + 44, v.real_time);
         h.drawSelected(cv, v, off);
         h.drawMinimap(cv, v, off);

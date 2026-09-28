@@ -65,6 +65,8 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/portrait.zig the talking faces in the HUD
       client/portrait_frames.zig  their animation frames (data)
       client/sound.zig    sound effects, voices, music
+      client/menus.zig    in-game menus (main, options, teams, bots,
+                          players, maps, "are you sure")
       client/app.zig      window, main loop, camera
 
     src/root.zig          (transitional) Zig code linked into the C++ programs:
@@ -87,8 +89,9 @@ run from the repository root.
    map, all objects with their animations and the effects, has the HUD and
    minimap, units can be selected and ordered, and production is run from
    the building windows and the factory list; news, computer messages and
-   votes are shown; the HUD faces talk; sound and music play. Missing:
-   the menus.
+   votes are shown; the HUD faces talk; sound and music play; the in-game
+   menus change teams, bots, maps, volume, speed and pause. Missing: the
+   end-of-game parade, animals, the crane's construction effect.
 4. **Bot**, then **map editor**.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
 
@@ -121,4 +124,8 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   gives them (the C++ client drew all of them white); computer messages
   blink on one clock (the C++ mixed real and game time);
 * the "you're losing" warnings play (the C++ looked for comp_youre_losing_0.wav
-  instead of comp_youre_losing_00.wav).
+  instead of comp_youre_losing_00.wav);
+* menus: "Pause Game" also resumes; Escape closes the front menu or opens
+  the main menu instead of quitting at once (Quit Game asks first); the
+  dead "Multiplayer" button is gone; menus stay inside the window; the mouse
+  wheel scrolls the list under the mouse only.

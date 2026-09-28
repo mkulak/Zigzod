@@ -18,6 +18,7 @@ const windows = @import("windows.zig");
 const messages = @import("messages.zig");
 const portrait = @import("portrait.zig");
 const sound = @import("sound.zig");
+const menus = @import("menus.zig");
 const Session = @import("session.zig").Session;
 
 const k = game.constants;
@@ -62,6 +63,11 @@ pub const App = struct {
     news: messages.News,
     notices: messages.Notices = .{},
     sounds: sound.Sounds = .{},
+    /// 0 (off) to 4 (full).
+    volume: u8 = 4,
+    menu_art: menus.Art,
+    menus: menus.Menus = .{},
+    left_on_menu: bool = false,
     /// Spoken warnings: fort under attack, losing.
     next_fort_warning: f64 = 0,
     next_losing_warning: f64 = 0,
@@ -157,6 +163,7 @@ pub const App = struct {
             .window_images = undefined,
             .list_images = undefined,
             .msg_images = undefined,
+            .menu_art = undefined,
             .news = .{ .gpa = gpa },
             .session = Session.init(gpa, conn, terrain_info, .{ .name = options.name, .team = options.team }),
             .prng = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
@@ -169,6 +176,7 @@ pub const App = struct {
         app.window_images = .load(assets);
         app.list_images = .load(assets);
         app.msg_images = .load(assets);
+        app.menu_art = .load(assets, &app.palettes);
         app.sounds.init(assets);
         _ = c.SDL_ShowCursor(c.SDL_DISABLE);
         app.sprites = try Sprites.load(gpa, assets, &app.palettes);
@@ -189,6 +197,7 @@ pub const App = struct {
         app.window_images.deinit();
         app.list_images.deinit();
         app.msg_images.deinit();
+        app.menu_art.deinit();
         app.sounds.deinit();
         app.news.deinit();
         app.control.deinit();
@@ -311,6 +320,9 @@ pub const App = struct {
                 app.placing = null;
                 app.control.reset(app.session.team);
             },
+            .team_ended => |te| if (te.team == @intFromEnum(app.session.team) and app.session.team != .none) {
+                app.hud.startParade(&app.session.world, app.session.team, te.won);
+            },
             .news => |n| {
                 std.log.info("news: {s}", .{n.text});
                 app.news.add(n.text, .{ .r = n.color[0], .g = n.color[1], .b = n.color[2] }, app.realTime());
@@ -426,12 +438,13 @@ pub const App = struct {
         }
         app.mouse_x = x;
         app.mouse_y = y;
+        app.control.hover = null;
+        if (app.menus.motion(x, y) or app.menus.contains(app.menuContext(), x, y)) return;
         const world = &app.session.world;
         if (app.left_on_hud) {
             // Dragging over the minimap moves the view.
             if (app.hud.minimapSpot(app.width, app.height, x, y)) |p| app.centerOn(p[0], p[1]);
         }
-        app.control.hover = null;
         if (app.overMap(x, y)) {
             const p = app.mouseMap();
             app.control.updateHover(world, p[0], p[1]);
@@ -443,6 +456,17 @@ pub const App = struct {
         const rng = app.prng.random();
         switch (button) {
             c.SDL_BUTTON_LEFT => {
+                switch (app.menus.press(&app.menu_art, app.menuContext(), app.mouse_x, app.mouse_y, app.realTime())) {
+                    .missed => {},
+                    .absorbed => {
+                        app.left_on_menu = true;
+                        return;
+                    },
+                    .command => |cmd| {
+                        app.left_on_menu = true;
+                        return app.menuCommand(cmd);
+                    },
+                }
                 if (app.hud.press(app.width, app.height, app.mouse_x, app.mouse_y)) |click| {
                     app.left_on_hud = true;
                     switch (click) {
@@ -498,6 +522,7 @@ pub const App = struct {
             c.SDL_BUTTON_MIDDLE => app.middle = .{ app.mouse_x, app.mouse_y },
             c.SDL_BUTTON_WHEELUP, c.SDL_BUTTON_WHEELDOWN => {
                 const up = button == c.SDL_BUTTON_WHEELUP;
+                if (app.menus.wheel(app.menuContext(), up, app.mouse_x, app.mouse_y)) return;
                 if (app.window) |*w| w.wheel(world, up) else if (app.factory_list.shown) app.factory_list.scroll(!up);
             },
             else => {},
@@ -509,6 +534,14 @@ pub const App = struct {
         const rng = app.prng.random();
         switch (button) {
             c.SDL_BUTTON_LEFT => {
+                if (app.left_on_menu) {
+                    app.left_on_menu = false;
+                    switch (app.menus.release(app.menuContext(), app.mouse_x, app.mouse_y)) {
+                        .command => |cmd| try app.menuCommand(cmd),
+                        else => {},
+                    }
+                    return;
+                }
                 if (app.left_on_hud) {
                     app.left_on_hud = false;
                     switch (app.hud.release(app.width, app.height, app.mouse_x, app.mouse_y)) {
@@ -613,6 +646,40 @@ pub const App = struct {
         }
     }
 
+    fn menuContext(app: *const App) menus.Context {
+        const clock = &app.session.world.clock;
+        return .{
+            .team = app.session.team,
+            .players = app.session.players.items,
+            .maps = app.session.selectable_maps.items,
+            .volume = app.volume,
+            .speed = clock.game_speed,
+            .paused = clock.paused,
+        };
+    }
+
+    fn menuCommand(app: *App, cmd: menus.Command) !void {
+        const P = net.protocol;
+        const s = &app.session;
+        switch (cmd) {
+            .reshuffle_teams => try s.send(.reshuffle_teams, &.{}),
+            .join => |t| try s.sendPacket(.set_team, P.Int{ .value = @intFromEnum(t) }),
+            .start_bot => |t| try s.sendPacket(.start_bot, P.Int{ .value = @intFromEnum(t) }),
+            .stop_bot => |t| try s.sendPacket(.stop_bot, P.Int{ .value = @intFromEnum(t) }),
+            .select_map => |i| try s.sendPacket(.select_map, P.Int{ .value = i }),
+            .toggle_pause => try s.sendPacket(.set_game_paused, P.GamePaused{ .game_paused = !s.world.clock.paused }),
+            .speed => |v| try s.sendPacket(.set_game_speed, P.Float{ .value = v }),
+            .reset_map => try s.send(.reset_map, &.{}),
+            .quit => app.quit = true,
+            .volume => |v| {
+                app.volume = v;
+                app.sounds.setVolume(v);
+                const names = [_][]const u8{ "volume off", "volume 25%", "volume 50%", "volume 75%", "volume full" };
+                app.news.add(names[@min(v, 4)], .{ .r = 0, .g = 0, .b = 0 }, app.realTime());
+            },
+        }
+    }
+
     fn compMsg(app: *App, m: net.protocol.ComputerMsg, snd: net.protocol.CompSound) void {
         switch (snd) {
             .vehicle, .robot => |which| {
@@ -643,6 +710,7 @@ pub const App = struct {
                 app.factory_list.shown = !app.factory_list.shown;
                 return;
             },
+            .menu => return app.menus.show(.main, false),
             else => return,
         };
         app.selectNext(kind);
@@ -668,7 +736,7 @@ pub const App = struct {
                 if (app.chat) |*t| {
                     t.deinit(app.gpa);
                     app.chat = null;
-                } else app.quit = true;
+                } else if (!app.menus.closeTop()) app.menus.show(.main, false);
                 return;
             },
             c.SDLK_F1 => return app.session.send(.vote_yes, &.{}),
@@ -722,6 +790,7 @@ pub const App = struct {
             'g', 'G' => app.selectNext(.cannon),
             'b', 'B' => app.factory_list.shown = !app.factory_list.shown,
             'h', 'H' => app.news.history = !app.news.history,
+            'p', 'P' => app.menus.show(.player_list, true),
             22 => app.control.selectAll(world, .vehicle, rng), // ctrl+v
             18 => app.control.selectAll(world, .robot, rng), // ctrl+r
             3 => app.control.selectAll(world, .cannon, rng), // ctrl+c
@@ -953,7 +1022,11 @@ pub const App = struct {
         }
 
         const screen_cv: gfx.Canvas = .{ .target = app.screen, .clip = .{ .x = 0, .y = 0, .w = app.width, .h = app.height } };
-        const kind = if (app.overMap(app.mouse_x, app.mouse_y)) app.control.cursorKind(world, app.drag != null) else .cursor;
+        const ctx = app.menuContext();
+        app.menus.update(ctx, now);
+        app.menus.draw(screen_cv, &app.menu_art, &app.fonts, ctx, app.width, app.height);
+        const over_menu = app.menus.contains(ctx, app.mouse_x, app.mouse_y);
+        const kind = if (app.overMap(app.mouse_x, app.mouse_y) and !over_menu) app.control.cursorKind(world, app.drag != null) else .cursor;
         app.cursors.draw(screen_cv, kind, app.control.team, now, app.mouse_x, app.mouse_y);
         _ = c.SDL_Flip(app.screen.surface);
     }

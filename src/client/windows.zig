@@ -576,12 +576,12 @@ pub const Production = struct {
         // Frame: corners, stretched edges, gray inside.
         cv.fill(.{ .x = r.x + side, .y = r.y + Picker.top, .w = r.w - 2 * side, .h = r.h - Picker.top - side }, .{ .r = 57, .g = 57, .b = 57 });
         if (images.fus_top_left) |tl| {
-            if (images.fus_top) |t| tile(cv, t, r.x + tl.width(), r.y, r.w - tl.width() - side, true);
+            if (images.fus_top) |t| cv.tile(t, .{ .x = r.x + tl.width(), .y = r.y, .w = r.w - tl.width() - side, .h = t.height() });
             cv.draw(tl, r.x, r.y);
         }
-        if (images.fus_bottom) |t| tile(cv, t, r.x + side, r.y + r.h - side, r.w - 2 * side, true);
-        if (images.fus_left) |t| tile(cv, t, r.x, r.y + Picker.top, r.h - Picker.top - side, false);
-        if (images.fus_right) |t| tile(cv, t, r.x + r.w - side, r.y + Picker.top, r.h - Picker.top - side, false);
+        if (images.fus_bottom) |t| cv.tile(t, .{ .x = r.x + side, .y = r.y + r.h - side, .w = r.w - 2 * side, .h = t.height() });
+        if (images.fus_left) |t| cv.tile(t, .{ .x = r.x, .y = r.y + Picker.top, .w = t.width(), .h = r.h - Picker.top - side });
+        if (images.fus_right) |t| cv.tile(t, .{ .x = r.x + r.w - side, .y = r.y + Picker.top, .w = t.width(), .h = r.h - Picker.top - side });
         if (images.fus_top_right) |img| cv.draw(img, r.x + r.w - side, r.y);
         if (images.fus_bottom_left) |img| cv.draw(img, r.x, r.y + r.h - side);
         if (images.fus_bottom_right) |img| cv.draw(img, r.x + r.w - side, r.y + r.h - side);
@@ -595,20 +595,6 @@ pub const Production = struct {
             p.drawUnit(cv, world, all, fx, rng, cell.unit, team, cx + 22, cy + 19, false);
             const name = unitName(cell.unit);
             small.draw(cv, name, cx + 23 - (small.width(name) >> 1), cy + 40);
-        }
-    }
-
-    /// Repeat `img` along a length (cut at the end).
-    fn tile(cv: Canvas, img: Image, x: i32, y: i32, len: i32, horizontal: bool) void {
-        var at: i32 = 0;
-        const step = if (horizontal) img.width() else img.height();
-        while (at < len) : (at += step) {
-            const part = @min(step, len - at);
-            if (horizontal) {
-                cv.drawPart(img, .{ .x = 0, .y = 0, .w = part, .h = img.height() }, x + at, y);
-            } else {
-                cv.drawPart(img, .{ .x = 0, .y = 0, .w = img.width(), .h = part }, x, y + at);
-            }
         }
     }
 };

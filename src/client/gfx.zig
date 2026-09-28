@@ -280,6 +280,27 @@ pub const Canvas = struct {
         }
     }
 
+    /// The same canvas limited to `r` (in canvas coordinates).
+    pub fn sub(cv: Canvas, r: Rect) Canvas {
+        var out = cv;
+        const to = Rect{ .x = r.x + cv.dx, .y = r.y + cv.dy, .w = r.w, .h = r.h };
+        out.clip = to.intersect(cv.clip) orelse .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+        return out;
+    }
+
+    /// Cover `r` with copies of `img`, cut at the right and bottom.
+    pub fn tile(cv: Canvas, img: Image, r: Rect) void {
+        const w = img.width();
+        const h = img.height();
+        if (w <= 0 or h <= 0 or r.w <= 0 or r.h <= 0) return;
+        const inside = cv.sub(r);
+        var y = r.y;
+        while (y < r.y + r.h) : (y += h) {
+            var x = r.x;
+            while (x < r.x + r.w) : (x += w) inside.draw(img, x, y);
+        }
+    }
+
     pub fn fill(cv: Canvas, r: Rect, col: Color) void {
         const to = Rect{ .x = r.x + cv.dx, .y = r.y + cv.dy, .w = r.w, .h = r.h };
         const visible = to.intersect(cv.clip) orelse return;
