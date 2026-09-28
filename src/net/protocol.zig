@@ -270,7 +270,7 @@ pub const Float = extern struct {
     value: f32 align(1),
 };
 
-pub const PortraitAnim = extern struct {
+pub const DoPortraitAnim = extern struct {
     ref_id: i32 align(1),
     anim_id: i32 align(1),
 };
@@ -384,6 +384,36 @@ comptime {
     std.debug.assert(@sizeOf(DriverInfo) == 12);
     std.debug.assert(@sizeOf(ProductionUnit) == 2);
 }
+
+// ---------------------------------------------------------------------------
+// Enumerations carried in payloads
+// ---------------------------------------------------------------------------
+
+/// Computer voice messages (COMP_MSG `sound`; the client's sound list order).
+pub const CompSound = enum(i32) {
+    vehicle = 19,
+    robot = 20,
+    gun = 21,
+    starting_manufacture = 22,
+    manufacturing_canceled = 23,
+    starting_repair = 24,
+    vehicle_repaired = 25,
+    territory_lost = 26,
+    radar_activated = 27,
+    fort_under_attack = 28,
+    _,
+};
+
+/// Portrait animations (DO_PORTRAIT_ANIM `anim_id`), the ones the server
+/// triggers.
+pub const PortraitAnim = enum(i32) {
+    target_destroyed = 30,
+    territory_taken = 58,
+    gun_captured = 60,
+    vehicle_captured = 61,
+    grenades_collected = 62,
+    _,
+};
 
 // ---------------------------------------------------------------------------
 // Encoding helpers

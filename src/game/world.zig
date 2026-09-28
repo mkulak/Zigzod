@@ -16,34 +16,13 @@ const obj = @import("object.zig");
 const protocol = @import("../net/protocol.zig");
 const ZTime = @import("../ztime.zig").ZTime;
 
+pub const Error = std.mem.Allocator.Error;
 pub const Object = obj.Object;
 pub const Waypoint = obj.Waypoint;
 pub const Point = pathfinding.Point;
 
-/// Computer voice messages (COMP_MSG sound ids, see the client's sound list).
-pub const CompSound = enum(i32) {
-    // Only the ones the server sends; values must match the client.
-    starting_manufacture = sound_base + 0,
-    manufacturing_canceled = sound_base + 1,
-    vehicle = sound_base + 2,
-    robot = sound_base + 3,
-    gun = sound_base + 4,
-    territory_lost = sound_base + 5,
-    radar_activated = sound_base + 6,
-    _,
-};
-/// Placeholder until the values are wired to the sound list (see
-/// `comp_sound_values`).
-const sound_base = 0;
-
-/// Portrait animations the server triggers (portrait_anim enum values).
-pub const PortraitAnim = enum(i32) {
-    target_destroyed = 30,
-    territory_taken = 58,
-    gun_captured = 60,
-    vehicle_captured = 61,
-    _,
-};
+pub const CompSound = protocol.CompSound;
+pub const PortraitAnim = protocol.PortraitAnim;
 
 pub const Audience = union(enum) {
     all,
@@ -204,7 +183,7 @@ pub const World = struct {
 
     /// Forts give their team the zone and its buildings; flags link to
     /// the buildings in their zone.
-    fn initZones(w: *World) !void {
+    fn initZones(w: *World) Error!void {
         for (w.objects.items) |o| {
             if (o.isFort()) {
                 const zi = w.zoneIndexAt(o.x, o.y) orelse continue;
@@ -221,7 +200,7 @@ pub const World = struct {
         w.resetZoneOwnership(false);
     }
 
-    fn linkFlag(w: *World, flag: *Object, zi: usize) !void {
+    fn linkFlag(w: *World, flag: *Object, zi: usize) Error!void {
         const f = &flag.kind.flag;
         f.linked.clearRetainingCapacity();
         w.zones.items[zi].owner = flag.owner;
@@ -269,7 +248,7 @@ pub const World = struct {
         health_percent: i32 = 100,
     };
 
-    pub fn createObject(w: *World, ot: k.ObjectType, oid: u8, x: i32, y: i32, owner: k.Team, placement: Placement, opts: CreateOptions) !?*Object {
+    pub fn createObject(w: *World, ot: k.ObjectType, oid: u8, x: i32, y: i32, owner: k.Team, placement: Placement, opts: CreateOptions) Error!?*Object {
         const planet = if (w.map) |m| m.planet() else .desert;
         var template = Object.init(w.next_ref_id, ot, oid, &w.settings, .{
             .planet = planet,
@@ -302,7 +281,7 @@ pub const World = struct {
 
     /// A robot squad: a leader and its minions (group size from settings
     /// unless `amount` is given).
-    pub fn createRobotGroup(w: *World, r: k.Robot, x: i32, y: i32, owner: k.Team, placement: Placement, amount: ?usize, health_percent: i32) !?*Object {
+    pub fn createRobotGroup(w: *World, r: k.Robot, x: i32, y: i32, owner: k.Team, placement: Placement, amount: ?usize, health_percent: i32) Error!?*Object {
         const n = amount orelse @as(usize, @intCast(@max(w.settings.robot[@intFromEnum(r)].group_amount, 0)));
         if (n == 0) return null;
         const leader = try w.createObject(.robot, @intFromEnum(r), x, y, owner, placement, .{ .health_percent = health_percent }) orelse return null;
@@ -315,7 +294,7 @@ pub const World = struct {
     }
 
     /// Add objects created during the step to the world.
-    pub fn addNewObjects(w: *World) !void {
+    pub fn addNewObjects(w: *World) Error!void {
         if (w.new_objects.items.len == 0) return;
         try w.objects.appendSlice(w.gpa, w.new_objects.items);
         w.new_objects.clearRetainingCapacity();
@@ -323,7 +302,7 @@ pub const World = struct {
     }
 
     /// Remove an object for good (the world's copy of ZServer::DeleteObject).
-    pub fn deleteObject(w: *World, index: usize) !void {
+    pub fn deleteObject(w: *World, index: usize) Error!void {
         const o = w.objects.items[index];
         try w.removeFromGroup(o);
         if (w.grid) |*g| o.unsetImpassables(g);
@@ -348,7 +327,7 @@ pub const World = struct {
 
     /// Take a robot out of its squad; minions of a removed leader follow a
     /// new leader.
-    fn removeFromGroup(w: *World, o: *Object) !void {
+    fn removeFromGroup(w: *World, o: *Object) Error!void {
         if (o.leader == null and o.minions.items.len == 0) return;
         if (w.findOpt(o.leader)) |leader| {
             removeId(&leader.minions, o.ref_id);
@@ -385,7 +364,7 @@ pub const World = struct {
     }
 
     /// Give all minions the leader's orders.
-    pub fn cloneMinionWaypoints(w: *World, leader: *Object) !void {
+    pub fn cloneMinionWaypoints(w: *World, leader: *Object) Error!void {
         for (leader.minions.items) |id| {
             const m = w.find(id) orelse continue;
             m.waypoints.clearRetainingCapacity();
@@ -455,7 +434,7 @@ pub const World = struct {
 
     /// Tell everyone about a health change and handle deaths
     /// (ZServer::UpdateObjectHealth).
-    pub fn updateObjectHealth(w: *World, o: *Object, attacker: ?i32) anyerror!void {
+    pub fn updateObjectHealth(w: *World, o: *Object, attacker: ?i32) Error!void {
         if (o.isDestroyed() and !o.processed_death) {
             o.processed_death = true;
             try w.relayObjectDeath(o, attacker);
@@ -470,7 +449,7 @@ pub const World = struct {
 
     /// A vehicle's driver was hit: show the effect, or if the driver died,
     /// the vehicle stops and becomes neutral.
-    pub fn updateObjectDriverHealth(w: *World, o: *Object) !void {
+    pub fn updateObjectDriverHealth(w: *World, o: *Object) Error!void {
         if (o.drivers.items.len > 0 and o.drivers.items[0].health > 0) {
             try w.sendPacket(.all, .driver_hit_effect, protocol.DriverHit{ .ref_id = o.ref_id });
             return;
@@ -499,7 +478,7 @@ pub const World = struct {
         }
     }
 
-    fn relayObjectDeath(w: *World, o: *Object, killer: ?i32) !void {
+    fn relayObjectDeath(w: *World, o: *Object, killer: ?i32) Error!void {
         const t = w.now();
         // Exploding turrets/grenade boxes fire missiles on death.
         var missiles: [128]protocol.FireMissileInfo = undefined;
@@ -561,7 +540,7 @@ pub const World = struct {
     }
 
     /// Kill everything standing on a destroyed bridge.
-    fn checkDestroyedBridge(w: *World, o: *Object) !void {
+    fn checkDestroyedBridge(w: *World, o: *Object) Error!void {
         const b = o.building() orelse return;
         if (!b.isBridge()) return;
         for (w.objects.items) |other| {
@@ -573,7 +552,7 @@ pub const World = struct {
     }
 
     /// Losing a fort eliminates its team.
-    fn checkDestroyedFort(w: *World, o: *Object) !void {
+    fn checkDestroyedFort(w: *World, o: *Object) Error!void {
         if (!o.isFort()) return;
         const team = o.owner;
         if (team == .none) return;
@@ -592,7 +571,7 @@ pub const World = struct {
     }
 
     /// A team without units loses its forts.
-    fn checkNoUnitsDestroyFort(w: *World, team: k.Team) !void {
+    fn checkNoUnitsDestroyFort(w: *World, team: k.Team) Error!void {
         if (team == .none) return;
         for (w.objects.items) |o| {
             if (o.owner == team and o.isUnit() and !o.isDestroyed()) return;
@@ -609,12 +588,12 @@ pub const World = struct {
     // Missiles
     // -----------------------------------------------------------------------
 
-    pub fn fireMissile(w: *World, m: DamageMissile) !void {
+    pub fn fireMissile(w: *World, m: DamageMissile) Error!void {
         try w.missiles.append(w.gpa, m);
     }
 
     /// Explode due missiles and damage everything in their radius.
-    pub fn processMissiles(w: *World) !void {
+    pub fn processMissiles(w: *World) Error!void {
         const t = w.now();
         var i: usize = 0;
         while (i < w.missiles.items.len) {
@@ -627,7 +606,7 @@ pub const World = struct {
         w.new_missiles.clearRetainingCapacity();
     }
 
-    fn missileDamage(w: *World, m: DamageMissile) !void {
+    fn missileDamage(w: *World, m: DamageMissile) Error!void {
         if (m.radius <= 0) return;
         const radius: f32 = @floatFromInt(m.radius);
         for (w.objects.items) |o| {
@@ -705,6 +684,7 @@ pub const World = struct {
         if (w.randInt(5) == 0) return;
         o.ev.updated_lid = true;
         o.kind.vehicle.lid_open = true;
+        o.kind.vehicle.close_lid_time = null;
     }
 
     fn signalLidShouldClose(w: *World, o: *Object) void {
@@ -719,14 +699,14 @@ pub const World = struct {
     // Teams, zones and flags
     // -----------------------------------------------------------------------
 
-    pub fn resetObjectTeam(w: *World, o: *Object, team: k.Team) !void {
+    pub fn resetObjectTeam(w: *World, o: *Object, team: k.Team) Error!void {
         o.owner = team;
         try w.relayTeam(o);
         w.checkUnitLimitReached();
     }
 
     /// Hand a flag's zone (and its buildings) to a team.
-    pub fn awardZone(w: *World, flag: *Object, team: k.Team, conqueror: ?*Object) !void {
+    pub fn awardZone(w: *World, flag: *Object, team: k.Team, conqueror: ?*Object) Error!void {
         if (conqueror) |c| try w.relayPortraitAnim(c.ref_id, .territory_taken);
         const zi = flag.zone orelse return;
         const old_team = w.zones.items[zi].owner;
@@ -746,7 +726,7 @@ pub const World = struct {
     }
 
     /// Units walking over an enemy flag capture it (checked 5x a second).
-    pub fn checkFlagCaptures(w: *World) !void {
+    pub fn checkFlagCaptures(w: *World) Error!void {
         const t = w.now();
         if (t <= w.next_flag_check_time) return;
         w.next_flag_check_time = t + 0.2;
@@ -806,7 +786,7 @@ pub const World = struct {
     }
 
     /// Units that sit on each other spread out a little (once a second).
-    pub fn scuffleUnits(w: *World) !void {
+    pub fn scuffleUnits(w: *World) Error!void {
         const t = w.now();
         if (t < w.next_scuffle_time) return;
         w.next_scuffle_time = t + 1.0;
@@ -989,7 +969,7 @@ pub const World = struct {
     }
 
     /// Store a built cannon in the building (up to four).
-    pub fn storeBuiltCannon(w: *World, o: *Object, c: k.Cannon) !bool {
+    pub fn storeBuiltCannon(w: *World, o: *Object, c: k.Cannon) Error!bool {
         const b = o.building() orelse return false;
         if (b.cannons.items.len >= k.max_stored_cannons) return false;
         try b.cannons.append(w.gpa, c);
@@ -997,7 +977,7 @@ pub const World = struct {
     }
 
     /// Create a produced unit next to the building and send it out.
-    pub fn buildingCreateUnit(w: *World, o: *Object, u: obj.Unit) !?*Object {
+    pub fn buildingCreateUnit(w: *World, o: *Object, u: obj.Unit) Error!?*Object {
         if (u.kind == .cannon) {
             if (w.cannonsInZone(o) < k.max_stored_cannons) {
                 if (try w.storeBuiltCannon(o, @enumFromInt(u.id))) {
@@ -1013,11 +993,14 @@ pub const World = struct {
         else
             try w.createObject(u.kind, u.id, p.x, p.y, o.owner, .deferred, .{})) orelse return null;
         try w.launchNewUnit(new, p, o.creationMovePoint().?);
+        try new.waypoints.appendSlice(w.gpa, o.rallypoints.items);
+        try w.announceNewUnit(new);
+        try w.compMessage(new.owner, new.ref_id, if (u.kind == .robot) .robot else .vehicle);
         return new;
     }
 
     /// Center a new unit (and its squad) on `at` and send it to `exit`.
-    fn launchNewUnit(w: *World, new: *Object, at: Point, exit: Point) !void {
+    fn launchNewUnit(w: *World, new: *Object, at: Point, exit: Point) Error!void {
         const nx = at.x - (new.width_pix >> 1);
         const ny = at.y - (new.height_pix >> 1);
         new.setPosition(nx, ny);
@@ -1032,7 +1015,7 @@ pub const World = struct {
     }
 
     /// After launching: announce a unit (and its squad) with its orders.
-    pub fn announceNewUnit(w: *World, new: *Object) !void {
+    pub fn announceNewUnit(w: *World, new: *Object) Error!void {
         for (new.minions.items) |id| {
             const m = w.findNew(id) orelse continue;
             m.waypoints.clearRetainingCapacity();
@@ -1044,7 +1027,7 @@ pub const World = struct {
     }
 
     /// A repair station finished: the unit comes out as new.
-    pub fn buildingRepairUnit(w: *World, o: *Object, job: *obj.Building.Repair) !?*Object {
+    pub fn buildingRepairUnit(w: *World, o: *Object, job: *obj.Building.Repair) Error!?*Object {
         const p = o.repairCenter() orelse return null;
         const new = (if (job.unit.kind == .robot)
             try w.createRobotGroup(@enumFromInt(job.unit.id), p.x, p.y, o.owner, .deferred, null, 100)
@@ -1065,7 +1048,7 @@ pub const World = struct {
     }
 
     /// A unit drives into a repair station.
-    pub fn unitEnterRepairBuilding(w: *World, unit: *Object, station: *Object) !void {
+    pub fn unitEnterRepairBuilding(w: *World, unit: *Object, station: *Object) Error!void {
         const b = station.building() orelse return;
         if (b.repair != null or !station.canRepairUnit(unit.owner)) return;
         var job: obj.Building.Repair = .{
@@ -1083,7 +1066,7 @@ pub const World = struct {
     }
 
     /// A robot squad climbs into an empty vehicle or cannon.
-    pub fn robotEnterObject(w: *World, robot: *Object, target: *Object) !void {
+    pub fn robotEnterObject(w: *World, robot: *Object, target: *Object) Error!void {
         if (!target.canBeEntered()) return;
         target.setDriverType(&w.settings, robot.kind.robot);
         try target.addDriver(w.gpa, &w.settings, robot.health);
@@ -1101,7 +1084,7 @@ pub const World = struct {
     }
 
     /// Robots leave a vehicle/cannon (EJECT_VEHICLE).
-    pub fn ejectDrivers(w: *World, o: *Object) !void {
+    pub fn ejectDrivers(w: *World, o: *Object) Error!void {
         if (!o.canEjectDrivers()) return;
         if (o.drivers.items.len > 0) {
             const was_cannon = o.kind == .cannon;
@@ -1134,20 +1117,20 @@ pub const World = struct {
     // Outgoing messages
     // -----------------------------------------------------------------------
 
-    pub fn send(w: *World, to: Audience, id: protocol.Message, payload: []const u8) !void {
+    pub fn send(w: *World, to: Audience, id: protocol.Message, payload: []const u8) Error!void {
         const copy = try w.gpa.dupe(u8, payload);
         errdefer w.gpa.free(copy);
         try w.outbox.append(w.gpa, .{ .to = to, .id = id, .payload = copy });
     }
 
-    pub fn sendPacket(w: *World, to: Audience, id: protocol.Message, packet: anytype) !void {
+    pub fn sendPacket(w: *World, to: Audience, id: protocol.Message, packet: anytype) Error!void {
         try w.send(to, id, protocol.bytesOf(&packet));
     }
 
     pub const Color = struct { r: u8 = 0, g: u8 = 0, b: u8 = 0 };
 
     /// A line in the players' news ticker.
-    pub fn news(w: *World, to: Audience, text: []const u8, color: Color) !void {
+    pub fn news(w: *World, to: Audience, text: []const u8, color: Color) Error!void {
         if (text.len == 0) return;
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(w.gpa);
@@ -1157,15 +1140,15 @@ pub const World = struct {
         try w.send(to, .news, buf.items);
     }
 
-    pub fn compMessage(w: *World, team: k.Team, ref_id: i32, sound: CompSound) !void {
-        try w.sendPacket(.{ .team = team }, .comp_msg, protocol.ComputerMsg{ .ref_id = ref_id, .sound = compSoundValue(sound) });
+    pub fn compMessage(w: *World, team: k.Team, ref_id: i32, sound: CompSound) Error!void {
+        try w.sendPacket(.{ .team = team }, .comp_msg, protocol.ComputerMsg{ .ref_id = ref_id, .sound = @intFromEnum(sound) });
     }
 
-    pub fn relayPortraitAnim(w: *World, ref_id: i32, anim: PortraitAnim) !void {
-        try w.sendPacket(.all, .do_portrait_anim, protocol.PortraitAnim{ .ref_id = ref_id, .anim_id = @intFromEnum(anim) });
+    pub fn relayPortraitAnim(w: *World, ref_id: i32, anim: PortraitAnim) Error!void {
+        try w.sendPacket(.all, .do_portrait_anim, protocol.DoPortraitAnim{ .ref_id = ref_id, .anim_id = @intFromEnum(anim) });
     }
 
-    pub fn relayNewObject(w: *World, o: *Object, to: Audience) !void {
+    pub fn relayNewObject(w: *World, o: *Object, to: Audience) Error!void {
         try w.sendPacket(to, .add_new_object, protocol.ObjectInit{
             .x = o.x,
             .y = o.y,
@@ -1186,22 +1169,22 @@ pub const World = struct {
         try w.relayGroupInfo(o, to);
     }
 
-    pub fn relayHealth(w: *World, o: *Object, to: Audience) !void {
+    pub fn relayHealth(w: *World, o: *Object, to: Audience) Error!void {
         try w.sendPacket(to, .update_health, protocol.ObjectHealth{ .ref_id = o.ref_id, .health = o.health });
     }
 
-    pub fn relayLocation(w: *World, o: *Object) !void {
+    pub fn relayLocation(w: *World, o: *Object) Error!void {
         var buf: [4 + @sizeOf(protocol.Location)]u8 = undefined;
         std.mem.writeInt(i32, buf[0..4], o.ref_id, .little);
         @memcpy(buf[4..], std.mem.asBytes(&o.location()));
         try w.send(.all, .send_loc, &buf);
     }
 
-    pub fn relayAttackTarget(w: *World, o: *Object) !void {
+    pub fn relayAttackTarget(w: *World, o: *Object) Error!void {
         try w.sendPacket(.all, .set_attack_object, protocol.AttackObject{ .ref_id = o.ref_id, .attack_object_ref_id = o.attack_target orelse -1 });
     }
 
-    fn waypointData(w: *World, ref_id: i32, list: []const Waypoint) ![]u8 {
+    fn waypointData(w: *World, ref_id: i32, list: []const Waypoint) Error![]u8 {
         const data = try w.gpa.alloc(u8, 8 + list.len * @sizeOf(Waypoint));
         std.mem.writeInt(i32, data[0..4], ref_id, .little);
         std.mem.writeInt(i32, data[4..8], @intCast(list.len), .little);
@@ -1210,20 +1193,20 @@ pub const World = struct {
     }
 
     /// Waypoints are only shown to the unit's own team.
-    pub fn relayWaypoints(w: *World, o: *Object) !void {
+    pub fn relayWaypoints(w: *World, o: *Object) Error!void {
         const data = try w.waypointData(o.ref_id, o.waypoints.items);
         defer w.gpa.free(data);
         try w.send(.{ .team = o.owner }, .send_waypoints, data);
     }
 
-    pub fn relayRallypoints(w: *World, o: *Object, to: Audience) !void {
+    pub fn relayRallypoints(w: *World, o: *Object, to: Audience) Error!void {
         if (!o.canSetRallypoints()) return;
         const data = try w.waypointData(o.ref_id, o.rallypoints.items);
         defer w.gpa.free(data);
         try w.send(to, .send_rallypoints, data);
     }
 
-    pub fn relayTeam(w: *World, o: *Object) !void {
+    pub fn relayTeam(w: *World, o: *Object) Error!void {
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(w.gpa);
         const header: protocol.ObjectTeam = .{
@@ -1242,7 +1225,7 @@ pub const World = struct {
     /// (and read them back the same way), so squads with minions never got
     /// through to C++ clients. These bytes reproduce that exactly while C++
     /// clients may connect.
-    pub fn relayGroupInfo(w: *World, o: *Object, to: Audience) !void {
+    pub fn relayGroupInfo(w: *World, o: *Object, to: Audience) Error!void {
         if (o.kind != .robot) return;
         const n = o.minions.items.len;
         const data = try w.gpa.alloc(u8, 12 + 4 * n);
@@ -1256,12 +1239,12 @@ pub const World = struct {
         try w.send(to, .object_group_info, data);
     }
 
-    pub fn relayGrenadeAmount(w: *World, o: *Object, to: Audience) !void {
+    pub fn relayGrenadeAmount(w: *World, o: *Object, to: Audience) Error!void {
         if (!o.canHaveGrenades()) return;
         try w.sendPacket(to, .set_grenade_amount, protocol.GrenadeAmount{ .ref_id = o.ref_id, .grenade_amount = o.grenades });
     }
 
-    pub fn relayBuiltCannons(w: *World, o: *Object) !void {
+    pub fn relayBuiltCannons(w: *World, o: *Object) Error!void {
         const b = o.building() orelse return;
         const data = try w.gpa.alloc(u8, 8 + b.cannons.items.len);
         defer w.gpa.free(data);
@@ -1271,7 +1254,7 @@ pub const World = struct {
         try w.send(.all, .set_built_cannon_amount, data);
     }
 
-    pub fn relayQueue(w: *World, o: *Object, to: Audience) !void {
+    pub fn relayQueue(w: *World, o: *Object, to: Audience) Error!void {
         const b = o.building() orelse return;
         if (!b.producesUnits()) return;
         const data = try w.gpa.alloc(u8, 8 + 2 * b.queue.items.len);
@@ -1285,7 +1268,7 @@ pub const World = struct {
         try w.send(to, .set_building_queue_list, data);
     }
 
-    pub fn relayRepairAnim(w: *World, o: *Object, to: Audience, play_sound: bool) !void {
+    pub fn relayRepairAnim(w: *World, o: *Object, to: Audience, play_sound: bool) Error!void {
         const b = o.building() orelse return;
         if (b.type != .repair) return;
         try w.sendPacket(to, .set_repair_anim, protocol.RepairBuildingAnim{
@@ -1297,17 +1280,12 @@ pub const World = struct {
     }
 
     /// Production state, repair animation and queue of a building.
-    pub fn relayBuildingState(w: *World, o: *Object, to: Audience) !void {
+    pub fn relayBuildingState(w: *World, o: *Object, to: Audience) Error!void {
         if (w.buildingState(o)) |state| try w.sendPacket(to, .set_building_state, state);
         try w.relayRepairAnim(o, to, true);
         try w.relayQueue(o, to);
     }
 };
-
-/// COMP_MSG sound values (the client's sound list order).
-fn compSoundValue(s: CompSound) i32 {
-    return @intFromEnum(s);
-}
 
 // ---------------------------------------------------------------------------
 // Tests

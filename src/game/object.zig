@@ -60,6 +60,11 @@ pub const Building = struct {
         drivers: std.ArrayList(Driver),
         waypoints: std.ArrayList(Waypoint),
         done_time: f64,
+
+        pub fn deinit(r: *Repair, gpa: std.mem.Allocator) void {
+            r.drivers.deinit(gpa);
+            r.waypoints.deinit(gpa);
+        }
     };
 
     pub fn producesUnits(b: *const Building) bool {
@@ -220,13 +225,37 @@ pub const Object = struct {
     /// Changes made while simulating that clients must hear about.
     ev: Events = .{},
 
+    /// What happened to an object during a simulation step that the
+    /// server must act on or tell clients about (the original's sflags).
     pub const Events = struct {
         updated_velocity: bool = false,
-        updated_attack_target: bool = false,
-        updated_lid: bool = false,
         updated_waypoints: bool = false,
-        updated_health: bool = false,
+        updated_attack_target: bool = false,
+        /// Damage was done to the attack target (or its driver).
+        attack_target_health: bool = false,
+        attack_target_driver_health: bool = false,
+        updated_lid: bool = false,
+        /// A missile was fired at this point.
+        fired_missile: ?Point = null,
+        /// The robot (squad) climbed into this vehicle or cannon.
+        entered_target: ?i32 = null,
+        /// This building finished producing a unit.
+        build_unit: ?Unit = null,
+        /// This repair station finished its job.
+        repair_done: bool = false,
+        /// This building rebuilt itself.
+        auto_repaired: bool = false,
+        crane_anim: ?struct { on: bool, building: i32 } = null,
+        /// The unit drove into this repair station.
+        entered_repair: ?i32 = null,
+        /// A fort was entered by this unit and blows up.
+        destroy_fort: ?i32 = null,
         updated_grenades: bool = false,
+        updated_leader_grenades: bool = false,
+        pickup_grenade_anim: bool = false,
+        /// The grenade box that was picked up.
+        delete_grenade_box: ?i32 = null,
+        portrait_anim: ?protocol.PortraitAnim = null,
     };
 
     pub fn deinit(o: *Object, gpa: std.mem.Allocator) void {
@@ -239,10 +268,7 @@ pub const Object = struct {
             .building => |*b| {
                 b.queue.deinit(gpa);
                 b.cannons.deinit(gpa);
-                if (b.repair) |*r| {
-                    r.drivers.deinit(gpa);
-                    r.waypoints.deinit(gpa);
-                }
+                if (b.repair) |*r| r.deinit(gpa);
             },
             .flag => |*f| f.linked.deinit(gpa),
             else => {},

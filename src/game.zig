@@ -8,6 +8,7 @@ pub const pathfinding = @import("game/pathfinding.zig");
 pub const buildlist = @import("game/buildlist.zig");
 pub const object = @import("game/object.zig");
 pub const world = @import("game/world.zig");
+pub const sim = @import("game/sim.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
