@@ -137,6 +137,13 @@ pub const World = struct {
 
     /// Replace the world with the map in `bytes` and its objects.
     pub fn loadMap(w: *World, bytes: []const u8) !void {
+        try w.setMap(bytes);
+        try w.placeObjects();
+    }
+
+    /// Replace the world with the map in `bytes`, without objects (clients
+    /// get those from the server).
+    pub fn setMap(w: *World, bytes: []const u8) !void {
         w.clear();
         var m = try mapfmt.Map.parse(w.gpa, bytes);
         errdefer m.deinit(w.gpa);
@@ -144,7 +151,10 @@ pub const World = struct {
         w.grid = try pathfinding.Grid.fromMap(w.gpa, &m, w.terrain);
         for (m.zones, 0..) |z, i| try w.zones.append(w.gpa, mapfmt.Zone.fromRect(@intCast(i), z));
         w.map = m;
+    }
 
+    /// Create the objects the map places, and set up zones and production.
+    fn placeObjects(w: *World) !void {
         for (w.map.?.placements) |p| {
             if (!placementOk(p)) continue;
             const x = @as(i32, p.x) * 16;
@@ -249,13 +259,19 @@ pub const World = struct {
     };
 
     pub fn createObject(w: *World, ot: k.ObjectType, oid: u8, x: i32, y: i32, owner: k.Team, placement: Placement, opts: CreateOptions) Error!?*Object {
+        const o = try w.createObjectWithId(w.next_ref_id, ot, oid, x, y, owner, placement, opts) orelse return null;
+        w.next_ref_id += 1;
+        return o;
+    }
+
+    /// Create an object with a given ref id (clients use the server's ids).
+    pub fn createObjectWithId(w: *World, ref_id: i32, ot: k.ObjectType, oid: u8, x: i32, y: i32, owner: k.Team, placement: Placement, opts: CreateOptions) Error!?*Object {
         const planet = if (w.map) |m| m.planet() else .desert;
-        var template = Object.init(w.next_ref_id, ot, oid, &w.settings, .{
+        var template = Object.init(ref_id, ot, oid, &w.settings, .{
             .planet = planet,
             .level = opts.level,
             .extra_links = opts.extra_links,
         }) orelse return null;
-        w.next_ref_id += 1;
 
         const o = try w.gpa.create(Object);
         errdefer w.gpa.destroy(o);
@@ -272,7 +288,12 @@ pub const World = struct {
         o.real_move_speed = @as(f64, @floatFromInt(o.move_speed)) * w.walkSpeed(o.center_x, o.center_y);
 
         switch (placement) {
-            .direct => try w.objects.append(w.gpa, o),
+            .direct => {
+                // Keep the list sorted by ref id.
+                var i = w.objects.items.len;
+                while (i > 0 and w.objects.items[i - 1].ref_id > o.ref_id) i -= 1;
+                try w.objects.insert(w.gpa, i, o);
+            },
             .deferred => try w.new_objects.append(w.gpa, o),
         }
         w.checkUnitLimitReached();

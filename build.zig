@@ -189,7 +189,7 @@ pub fn build(b: *std.Build) void {
         compiled[i] = exe;
     }
 
-    // `zod`: the Zig engine (so far the game server), pure Zig.
+    // `zod`: the Zig engine (the game server and the client in progress).
     const zod_options = b.addOptions();
     zod_options.addOption([]const u8, "data_dir", b.pathFromRoot("bin"));
     const zod_mod = b.createModule(.{
@@ -199,6 +199,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     zod_mod.addOptions("build_options", zod_options);
+    zod_mod.addImport("c", c_mod);
+    linkEngineLibraries(zod_mod, sdl, use_opengl, os_tag);
     const zod = b.addExecutable(.{ .name = "zod", .root_module = zod_mod });
     b.installArtifact(zod);
 
