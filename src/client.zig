@@ -7,6 +7,9 @@ pub const sprites = @import("client/sprites.zig");
 pub const objects = @import("client/objects.zig");
 pub const units = @import("client/units.zig");
 pub const effects = @import("client/effects.zig");
+pub const hud = @import("client/hud.zig");
+pub const cursor = @import("client/cursor.zig");
+pub const control = @import("client/control.zig");
 pub const session = @import("client/session.zig");
 pub const app = @import("client/app.zig");
 

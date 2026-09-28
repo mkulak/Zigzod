@@ -53,6 +53,8 @@ pub const Event = union(enum) {
     repair_anim: protocol.RepairBuildingAnim,
     lid: protocol.SetLidState,
     snipe: i32,
+    /// `attacker` started attacking `target`.
+    attacked: struct { attacker: i32, target: i32 },
     driver_hit: i32,
     pickup_grenades: i32,
     team_ended: protocol.TeamEnded,
@@ -278,6 +280,7 @@ pub const Session = struct {
                 const v = protocol.decode(protocol.AttackObject, data) orelse return;
                 const o = s.find(v.ref_id) orelse return;
                 o.attack_target = if (s.find(v.attack_object_ref_id) != null) v.attack_object_ref_id else null;
+                if (o.attack_target) |t| try s.emit(.{ .attacked = .{ .attacker = o.ref_id, .target = t } });
             },
             .update_health => {
                 const v = protocol.decode(protocol.ObjectHealth, data) orelse return;

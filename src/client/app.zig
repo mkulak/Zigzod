@@ -10,13 +10,17 @@ const font = @import("font.zig");
 const Sprites = @import("sprites.zig").Sprites;
 const Renderer = @import("objects.zig").Renderer;
 const Effects = @import("effects.zig").Effects;
+const hud_mod = @import("hud.zig");
+const cursor = @import("cursor.zig");
+const Control = @import("control.zig").Control;
+const drawSelectionBox = @import("control.zig").drawSelectionBox;
 const Session = @import("session.zig").Session;
 
 const k = game.constants;
 const Object = game.object.Object;
 
-pub const hud_width = 100;
-pub const hud_height = 36;
+const hud_width = hud_mod.width;
+const hud_height = hud_mod.height;
 
 pub const Options = struct {
     host: [:0]const u8 = "localhost",
@@ -45,6 +49,9 @@ pub const App = struct {
     sprites: *Sprites,
     objects: Renderer,
     fx: Effects,
+    hud: hud_mod.Hud,
+    cursors: cursor.Cursors,
+    control: Control,
     session: Session,
     prng: std.Random.DefaultPrng,
     clock_origin: std.Io.Timestamp,
@@ -52,9 +59,29 @@ pub const App = struct {
     /// Top-left map pixel shown.
     view_x: i32 = 0,
     view_y: i32 = 0,
-    keys: struct { left: bool = false, right: bool = false, up: bool = false, down: bool = false } = .{},
+    keys: struct {
+        left: bool = false,
+        right: bool = false,
+        up: bool = false,
+        down: bool = false,
+        shift: bool = false,
+        ctrl: bool = false,
+        alt: bool = false,
+        /// Held while ordering: only the nearest unit goes.
+        z: bool = false,
+    } = .{},
     mouse_x: i32 = 0,
     mouse_y: i32 = 0,
+    /// Left button: where a selection box started (map coordinates), or
+    /// pressed on the HUD.
+    drag: ?[2]i32 = null,
+    left_on_hud: bool = false,
+    /// Middle button drags the map.
+    middle: ?[2]i32 = null,
+    /// The camera glides to this view position.
+    glide_to: ?[2]i32 = null,
+    /// Text typed into the chat line (null when not typing).
+    chat: ?std.ArrayList(u8) = null,
     last_frame: f64 = 0,
     quit: bool = false,
     /// The camera starts on our fort once it arrives.
@@ -104,12 +131,18 @@ pub const App = struct {
             .sprites = undefined,
             .objects = undefined,
             .fx = undefined,
+            .hud = undefined,
+            .cursors = undefined,
+            .control = .init(gpa),
             .session = Session.init(gpa, conn, terrain_info, .{ .name = options.name, .team = options.team }),
             .prng = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
             .clock_origin = std.Io.Clock.awake.now(io),
         };
         app.sheets = terrain_mod.Sheets.load(assets, &app.palettes);
         app.fonts = font.Fonts.load(assets);
+        app.hud = .init(assets, &app.palettes, &app.fonts);
+        app.cursors = .load(assets, &app.palettes);
+        _ = c.SDL_ShowCursor(c.SDL_DISABLE);
         app.sprites = try Sprites.load(gpa, assets, &app.palettes);
         app.fx = Effects.init(gpa, app.sprites, &app.palettes, app.prng.random());
         app.objects = Renderer.init(gpa, app.sprites, &app.fonts, &app.fx);
@@ -122,6 +155,10 @@ pub const App = struct {
         if (app.terrain) |*t| t.deinit();
         app.objects.deinit();
         app.fx.deinit();
+        app.hud.deinit();
+        app.cursors.deinit();
+        app.control.deinit();
+        if (app.chat) |*t| t.deinit(gpa);
         app.sprites.deinit();
         app.fonts.deinit();
         app.sheets.deinit();
@@ -143,7 +180,7 @@ pub const App = struct {
             try app.session.update(now);
             try app.handleEvents();
             app.handleSessionEvents() catch |err| return err;
-            app.scroll(now - app.last_frame);
+            app.updateCamera(now - app.last_frame);
             app.last_frame = now;
             app.render(now);
             if (!app.session.connected()) {
@@ -167,19 +204,46 @@ pub const App = struct {
                 };
                 app.focused = false;
                 app.fx.reset();
+                app.hud.reset();
+                app.hud.setMap(m);
+                app.control.reset(app.session.team);
                 app.objects.our_team = app.session.team;
                 app.objects.setMap(m, app.terrain_info) catch {};
             },
-            .deleted_object => |id| app.objects.remove(id),
+            .deleted_object => |id| {
+                app.objects.remove(id);
+                app.control.forget(id);
+            },
+            .team_changed => |id| if (app.session.find(id)) |o| {
+                if (o.owner != app.control.team) app.control.forget(id);
+            },
+            .comp_msg => |m| switch (@as(net.protocol.CompSound, @enumFromInt(m.sound))) {
+                .vehicle, .robot => app.control.notice(.{ .id = m.ref_id, .select = true, .time = app.realTime() }),
+                .gun => app.control.notice(.{ .id = m.ref_id, .open_gui = true, .time = app.realTime() }),
+                .vehicle_repaired => app.control.notice(.{ .id = m.ref_id, .time = app.realTime() }),
+                else => {},
+            },
+            .portrait_anim => |pa| if (app.session.find(pa.ref_id)) |o| {
+                if (o.owner == app.control.team) app.control.notice(.{ .id = pa.ref_id, .select = true, .time = app.realTime() });
+            },
             .health_changed => |hc| if (app.session.find(hc.ref_id)) |o| {
                 if (o.health < hc.old) app.objects.hit(o);
                 if (hc.old <= 0 and !o.isDestroyed()) app.objects.revived(o);
             },
             .destroyed => |d| app.objects.killed(d.object, d.fire_death, d.missile_death, d.missiles),
             .snipe => |id| if (app.session.find(id)) |o| app.objects.sniped(o),
+            .attacked => |a| if (app.session.find(a.target)) |t| {
+                if (t.owner == app.session.team and t.owner != .none and app.hud.alert == null) {
+                    app.hud.attacked(a.target, app.session.world.now(), app.prng.random());
+                    if (app.hud.alert != null) app.control.notice(.{ .id = a.target, .select = true, .time = app.realTime() });
+                }
+            },
             .driver_hit => |id| if (app.session.find(id)) |o| app.objects.driverHit(o),
             .fired_missile => |fm| if (app.session.find(fm.ref_id)) |o| app.objects.fireMissile(&app.session.world, o, fm.x, fm.y),
-            .pickup_grenades => |id| if (app.session.find(id)) |o| app.objects.pickupGrenades(o),
+            .pickup_grenades => |id| if (app.session.find(id)) |o| {
+                app.objects.pickupGrenades(o);
+                if (o.owner == app.control.team) app.control.notice(.{ .id = id, .select = true, .time = app.realTime() });
+            },
             .crane_anim => |ca| if (app.session.find(ca.ref_id)) |o| app.objects.craneAnim(o, ca.on),
             .repair_anim => |ra| if (app.session.find(ra.ref_id)) |o| {
                 app.objects.repairAnim(o, ra.on, ra.remaining_time, app.session.world.now());
@@ -196,6 +260,8 @@ pub const App = struct {
                 app.terrain = null;
                 app.objects.reset();
                 app.fx.reset();
+                app.hud.reset();
+                app.control.reset(app.session.team);
             },
             .news => |n| std.log.info("news: {s}", .{n.text}),
             else => {},
@@ -203,11 +269,16 @@ pub const App = struct {
     }
 
     // -----------------------------------------------------------------------
-    // Camera and input
+    // Camera
     // -----------------------------------------------------------------------
 
     fn mapArea(app: *const App) gfx.Rect {
         return .{ .x = 0, .y = 0, .w = @max(app.width - hud_width, 0), .h = @max(app.height - hud_height, 0) };
+    }
+
+    fn view(app: *const App) gfx.Rect {
+        const area = app.mapArea();
+        return .{ .x = app.view_x, .y = app.view_y, .w = area.w, .h = area.h };
     }
 
     fn clampView(app: *App) void {
@@ -224,15 +295,53 @@ pub const App = struct {
         app.clampView();
     }
 
-    fn scroll(app: *App, dt: f64) void {
-        const speed = 900.0;
-        const amount: i32 = @intFromFloat(@min(dt, 0.1) * speed);
+    /// Glide the camera to center on (x, y) (FocusCameraTo).
+    fn lookAt(app: *App, x: i32, y: i32) void {
+        const area = app.mapArea();
+        app.glide_to = .{ x - (area.w >> 1), y - (area.h >> 1) };
+    }
+
+    fn updateCamera(app: *App, dt_in: f64) void {
+        const dt = @min(dt_in, 0.1);
+        if (app.glide_to) |to| {
+            // A tenth of the way each 60th of a second.
+            const f = 1 - std.math.pow(f64, 0.9, dt * 60);
+            const old_x = app.view_x;
+            const old_y = app.view_y;
+            app.view_x += step(to[0] - app.view_x, f);
+            app.view_y += step(to[1] - app.view_y, f);
+            app.clampView();
+            if (app.view_x == old_x and app.view_y == old_y) app.glide_to = null;
+            return;
+        }
+        const amount: i32 = @intFromFloat(dt * scroll_speed);
         const edge = 3;
-        if (app.keys.left or app.mouse_x < edge) app.view_x -= amount;
-        if (app.keys.right or app.mouse_x >= app.width - edge) app.view_x += amount;
-        if (app.keys.up or app.mouse_y < edge) app.view_y -= amount;
-        if (app.keys.down or app.mouse_y >= app.height - edge) app.view_y += amount;
+        const k_ = app.keys;
+        if ((k_.left and !k_.right) or app.mouse_x < edge) app.view_x -= amount;
+        if ((k_.right and !k_.left) or app.mouse_x >= app.width - edge) app.view_x += amount;
+        if ((k_.up and !k_.down) or app.mouse_y < edge) app.view_y -= amount;
+        if ((k_.down and !k_.up) or app.mouse_y >= app.height - edge) app.view_y += amount;
         app.clampView();
+    }
+
+    const scroll_speed = 400.0;
+
+    fn step(d: i32, f: f64) i32 {
+        if (d == 0) return 0;
+        const s_: i32 = @intFromFloat(@as(f64, @floatFromInt(d)) * f);
+        return if (s_ != 0) s_ else std.math.sign(d);
+    }
+
+    // -----------------------------------------------------------------------
+    // Input
+    // -----------------------------------------------------------------------
+
+    fn overMap(app: *const App, x: i32, y: i32) bool {
+        return !hud_mod.Hud.contains(app.width, app.height, x, y);
+    }
+
+    fn mouseMap(app: *const App) [2]i32 {
+        return .{ app.mouse_x + app.view_x, app.mouse_y + app.view_y };
     }
 
     fn handleEvents(app: *App) !void {
@@ -247,25 +356,207 @@ pub const App = struct {
                     app.height = ev.resize.h;
                     app.clampView();
                 },
-                c.SDL_MOUSEMOTION => {
-                    app.mouse_x = ev.motion.x;
-                    app.mouse_y = ev.motion.y;
-                },
-                c.SDL_KEYDOWN, c.SDL_KEYUP => {
-                    const down = ev.type == c.SDL_KEYDOWN;
-                    switch (ev.key.keysym.sym) {
-                        c.SDLK_LEFT => app.keys.left = down,
-                        c.SDLK_RIGHT => app.keys.right = down,
-                        c.SDLK_UP => app.keys.up = down,
-                        c.SDLK_DOWN => app.keys.down = down,
-                        c.SDLK_ESCAPE => if (down) {
-                            app.quit = true;
+                c.SDL_MOUSEMOTION => app.mouseMoved(ev.motion.x, ev.motion.y),
+                c.SDL_MOUSEBUTTONDOWN => try app.mouseDown(ev.button.button),
+                c.SDL_MOUSEBUTTONUP => try app.mouseUp(ev.button.button),
+                c.SDL_KEYDOWN => try app.keyDown(ev.key.keysym.sym, ev.key.keysym.unicode),
+                c.SDL_KEYUP => try app.keyUp(ev.key.keysym.sym),
+                else => {},
+            }
+        }
+    }
+
+    fn mouseMoved(app: *App, x: i32, y: i32) void {
+        if (app.middle) |m| {
+            app.view_x -= x - m[0];
+            app.view_y -= y - m[1];
+            app.clampView();
+            app.middle = .{ x, y };
+        }
+        app.mouse_x = x;
+        app.mouse_y = y;
+        const world = &app.session.world;
+        if (app.left_on_hud) {
+            // Dragging over the minimap moves the view.
+            if (app.hud.minimapSpot(app.width, app.height, x, y)) |p| app.centerOn(p[0], p[1]);
+        }
+        app.control.hover = null;
+        if (app.overMap(x, y)) {
+            const p = app.mouseMap();
+            app.control.updateHover(world, p[0], p[1]);
+        }
+    }
+
+    fn mouseDown(app: *App, button: u8) !void {
+        const world = &app.session.world;
+        const rng = app.prng.random();
+        switch (button) {
+            c.SDL_BUTTON_LEFT => {
+                if (app.hud.press(app.width, app.height, app.mouse_x, app.mouse_y)) |click| {
+                    app.left_on_hud = true;
+                    switch (click) {
+                        .map => |p| app.centerOn(p[0], p[1]),
+                        .jump => |id| if (world.find(id)) |o| {
+                            app.lookAt(o.center_x, o.center_y);
+                            if (!app.control.isSelected(id)) app.control.select(world, id, rng);
                         },
                         else => {},
                     }
-                },
-                else => {},
-            }
+                    return;
+                }
+                app.control.clear(world, rng);
+                app.drag = app.mouseMap();
+            },
+            c.SDL_BUTTON_MIDDLE => app.middle = .{ app.mouse_x, app.mouse_y },
+            else => {},
+        }
+    }
+
+    fn mouseUp(app: *App, button: u8) !void {
+        const world = &app.session.world;
+        const rng = app.prng.random();
+        switch (button) {
+            c.SDL_BUTTON_LEFT => {
+                if (app.left_on_hud) {
+                    app.left_on_hud = false;
+                    switch (app.hud.release(app.width, app.height, app.mouse_x, app.mouse_y)) {
+                        .button => |b| app.hudButton(b),
+                        else => {},
+                    }
+                    return;
+                }
+                const start = app.drag orelse return;
+                app.drag = null;
+                const p = app.mouseMap();
+                app.control.selectBox(world, start[0], start[1], p[0], p[1], rng);
+            },
+            c.SDL_BUTTON_RIGHT => try app.order(),
+            c.SDL_BUTTON_MIDDLE => app.middle = null,
+            else => {},
+        }
+    }
+
+    /// Right click: order the selected units there (sent now unless shift
+    /// is held, to queue several).
+    fn order(app: *App) !void {
+        const world = &app.session.world;
+        const minimap = app.hud.minimapSpot(app.width, app.height, app.mouse_x, app.mouse_y);
+        if (minimap == null and !app.overMap(app.mouse_x, app.mouse_y)) return;
+        const at = minimap orelse app.mouseMap();
+        app.control.addOrder(world, at[0], at[1], .{ .from_minimap = minimap != null, .attack_to = app.keys.ctrl, .no_attack_to = app.keys.alt });
+        if (app.keys.shift) return;
+        // Clicking a lone APC or cannon lets its drivers out.
+        if (app.control.selected.items.len == 1 and minimap == null) {
+            const id = app.control.selected.items[0];
+            if (world.find(id)) |o| if (o.canEjectDrivers() and o.underPoint(at[0], at[1])) {
+                try app.session.sendPacket(.eject_vehicle, net.protocol.EjectVehicle{ .ref_id = id });
+                app.control.forgetOrders();
+            };
+        }
+        try app.control.sendOrders(&app.session, app.keys.z, app.prng.random());
+    }
+
+    fn hudButton(app: *App, b: hud_mod.Button) void {
+        const kind: @import("control.zig").UnitKind = switch (b) {
+            .r => .robot,
+            .v => .vehicle,
+            .g => .cannon,
+            else => return,
+        };
+        app.selectNext(kind);
+    }
+
+    fn selectNext(app: *App, kind: @import("control.zig").UnitKind) void {
+        const p = app.mouseMap();
+        if (app.control.selectNext(&app.session.world, kind, p[0], p[1], app.realTime(), app.prng.random())) |o| {
+            app.lookAt(o.center_x, o.center_y);
+        }
+    }
+
+    fn keyDown(app: *App, sym: c_uint, unicode: u16) !void {
+        switch (sym) {
+            c.SDLK_LEFT => app.keys.left = true,
+            c.SDLK_RIGHT => app.keys.right = true,
+            c.SDLK_UP => app.keys.up = true,
+            c.SDLK_DOWN => app.keys.down = true,
+            c.SDLK_LSHIFT, c.SDLK_RSHIFT => app.keys.shift = true,
+            c.SDLK_LCTRL, c.SDLK_RCTRL => app.keys.ctrl = true,
+            c.SDLK_LALT, c.SDLK_RALT => app.keys.alt = true,
+            c.SDLK_ESCAPE => {
+                if (app.chat) |*t| {
+                    t.deinit(app.gpa);
+                    app.chat = null;
+                } else app.quit = true;
+                return;
+            },
+            c.SDLK_F1 => return app.session.send(.vote_yes, &.{}),
+            c.SDLK_F2 => return app.session.send(.vote_no, &.{}),
+            c.SDLK_F3 => return app.session.send(.vote_pass, &.{}),
+            else => {},
+        }
+        if (sym == 'z' and app.chat == null) app.keys.z = true;
+        if (app.chat != null) return app.typeChat(unicode);
+        if (sym >= '0' and sym <= '9') {
+            const n: usize = sym - '0';
+            if (app.keys.ctrl) {
+                app.control.setGroup(n);
+            } else if (app.control.loadGroup(&app.session.world, n, app.prng.random())) |p| app.lookAt(p[0], p[1]);
+            return;
+        }
+        try app.hotkey(unicode);
+    }
+
+    fn keyUp(app: *App, sym: c_uint) !void {
+        switch (sym) {
+            c.SDLK_LEFT => app.keys.left = false,
+            c.SDLK_RIGHT => app.keys.right = false,
+            c.SDLK_UP => app.keys.up = false,
+            c.SDLK_DOWN => app.keys.down = false,
+            c.SDLK_LCTRL, c.SDLK_RCTRL => app.keys.ctrl = false,
+            c.SDLK_LALT, c.SDLK_RALT => app.keys.alt = false,
+            c.SDLK_LSHIFT, c.SDLK_RSHIFT => {
+                app.keys.shift = false;
+                // Queued orders go out.
+                try app.control.sendOrders(&app.session, app.keys.z, app.prng.random());
+            },
+            'z' => app.keys.z = false,
+            else => {},
+        }
+    }
+
+    /// Letters (ZPlayer::ProcessUnicode). Ctrl+letter comes as a control
+    /// character.
+    fn hotkey(app: *App, key: u16) !void {
+        const world = &app.session.world;
+        const rng = app.prng.random();
+        switch (key) {
+            '\r' => app.chat = .empty,
+            '/' => {
+                app.chat = .empty;
+                try app.chat.?.append(app.gpa, '/');
+            },
+            'r', 'R' => app.selectNext(.robot),
+            'v', 'V' => if (!app.keys.alt) app.selectNext(.vehicle),
+            'g', 'G' => app.selectNext(.cannon),
+            22 => app.control.selectAll(world, .vehicle, rng), // ctrl+v
+            18 => app.control.selectAll(world, .robot, rng), // ctrl+r
+            3 => app.control.selectAll(world, .cannon, rng), // ctrl+c
+            1 => app.control.selectAll(world, null, rng), // ctrl+a
+            ' ' => if (app.control.nextNotice(world, app.realTime(), rng)) |o| app.lookAt(o.center_x, o.center_y),
+            else => {},
+        }
+    }
+
+    fn typeChat(app: *App, key: u16) !void {
+        const text = &app.chat.?;
+        switch (key) {
+            '\r' => {
+                if (text.items.len > 0) try app.session.chat(text.items);
+                text.deinit(app.gpa);
+                app.chat = null;
+            },
+            8 => _ = text.pop(),
+            else => if (key >= 32 and key < 127) try text.append(app.gpa, @intCast(key)),
         }
     }
 
@@ -278,20 +569,44 @@ pub const App = struct {
         app.screen.fill(null, black);
         const area = app.mapArea();
         const cv: gfx.Canvas = .{ .target = app.screen, .clip = area, .dx = -app.view_x, .dy = -app.view_y };
-        const view: gfx.Rect = .{ .x = app.view_x, .y = app.view_y, .w = area.w, .h = area.h };
+        const v = app.view();
+        const world = &app.session.world;
+        if (app.control.team != app.session.team) app.control.reset(app.session.team);
 
         if (app.terrain) |*t| {
-            const world = &app.session.world;
-            app.objects.update(world, t, world.now());
-            app.fx.update(.{ .time = world.now(), .world = world, .terrain = t });
-            t.draw(cv, view, world.now(), world.zones.items, app.prng.random());
-            app.fx.drawGround(cv, view);
-            app.objects.drawPre(cv, world, view);
-            app.objects.draw(cv, world, view);
-            app.objects.drawAfter(cv, world, view);
-            app.fx.draw(cv, view);
+            const time = world.now();
+            app.objects.update(world, t, time);
+            app.fx.update(.{ .time = time, .world = world, .terrain = t });
+            t.draw(cv, v, time, world.zones.items, app.prng.random());
+            app.fx.drawGround(cv, v);
+            app.objects.drawPre(cv, world, v);
+            app.control.drawRoutes(cv, world, &app.cursors, time);
+            app.objects.draw(cv, world, v);
+            app.objects.drawAfter(cv, world, v);
+            app.fx.draw(cv, v);
+            app.control.drawSelection(cv, world, &app.palettes, &app.fonts, time);
+            if (app.drag) |d| {
+                const p = app.mouseMap();
+                drawSelectionBox(cv, &app.palettes, app.control.team, d[0], d[1], p[0], p[1], time);
+                // The box selects as it grows.
+                app.control.selectBox(world, d[0], d[1], p[0], p[1], app.prng.random());
+            }
+
+            app.hud.updateButtons(world, app.session.team);
+            app.hud.update(world, time);
+            app.hud.draw(app.screen, .{
+                .world = world,
+                .team = app.session.team,
+                .selected = world.findOpt(app.control.hud_unit),
+                .time = time,
+                .view = v,
+                .chat = if (app.chat) |t_| t_.items else null,
+            });
         }
-        _ = now;
+
+        const screen_cv: gfx.Canvas = .{ .target = app.screen, .clip = .{ .x = 0, .y = 0, .w = app.width, .h = app.height } };
+        const kind = if (app.overMap(app.mouse_x, app.mouse_y)) app.control.cursorKind(world, app.drag != null) else .cursor;
+        app.cursors.draw(screen_cv, kind, app.control.team, now, app.mouse_x, app.mouse_y);
         _ = c.SDL_Flip(app.screen.surface);
     }
 };

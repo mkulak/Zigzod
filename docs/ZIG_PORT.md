@@ -56,6 +56,9 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/units.zig    cannon, vehicle and robot animations
       client/effects.zig  shots, explosions, debris, wrecks, fires, tracks
       client/font.zig     bitmap fonts
+      client/hud.zig      side panel, bottom bar, buttons, minimap
+      client/cursor.zig   mouse cursors
+      client/control.zig  selecting units, control groups, giving orders
       client/app.zig      window, main loop, camera
 
     src/root.zig          (transitional) Zig code linked into the C++ programs:
@@ -74,9 +77,10 @@ run from the repository root.
    it. The C++ server code is still built because `zod_engine` without `-c`
    starts one in-process.
 3. **Client** - rendering (SDL/OpenGL), HUD, menus, sound and music.
-   In progress: `zod client` connects, keeps the game in sync and draws the
-   map, all objects with their animations, and the effects. Missing: HUD,
-   minimap, selecting and ordering units, menus, sound.
+   In progress: `zod client` connects, keeps the game in sync, draws the
+   map, all objects with their animations and the effects, has the HUD and
+   minimap, and units can be selected and ordered. Missing: building
+   windows (production, placing guns), portraits, messages, menus, sound.
 4. **Bot**, then **map editor**.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
 
@@ -101,4 +105,7 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   clients see the full route;
 * rotated and scaled effect images are cached per angle and size; the C++
   cache was invalidated the wrong way round (rebuilt when nothing changed,
-  kept stale when the angle or size did).
+  kept stale when the angle or size did);
+* the selection's abilities are recomputed from scratch (a crane leaving the
+  selection left "can repair" set); the camera glides at the same speed
+  whatever the frame rate; the HUD clock shows the game time.

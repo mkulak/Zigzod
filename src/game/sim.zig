@@ -816,14 +816,15 @@ fn canAttackObject(w: *const World, o: *const Object, target: *const Object) boo
 fn inRange(w: *const World, o: *const Object, target: *const Object, radius: i32) bool {
     if (!withinDistance(o.center_x, o.center_y, target.center_x, target.center_y, radius)) return false;
     if (target.isDestroyableImpass()) return true;
-    return !w.grid.?.engageBarrierBetween(o.center_x, o.center_y, target.center_x, target.center_y);
+    const grid = w.grid orelse return true;
+    return !grid.engageBarrierBetween(o.center_x, o.center_y, target.center_x, target.center_y);
 }
 
 fn withinAttackRadius(w: *const World, o: *const Object, target: *const Object) bool {
     return inRange(w, o, target, o.attack_radius);
 }
 
-fn withinAgroRadius(w: *const World, o: *const Object, target: *const Object) bool {
+pub fn withinAgroRadius(w: *const World, o: *const Object, target: *const Object) bool {
     return inRange(w, o, target, o.attack_radius + w.settings.agro_distance);
 }
 
