@@ -1,5 +1,6 @@
 //! `zod`: the Zig Zod engine: `zod server` runs the game server, `zod
-//! client` the game client and `zod bot` a computer player.
+//! client` the game client, `zod bot` a computer player and `zod edit` the
+//! map editor.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -8,6 +9,7 @@ const Server = @import("server/server.zig").Server;
 const Options = @import("server/server.zig").Options;
 const App = @import("client/app.zig").App;
 const Bot = @import("bot.zig").Bot;
+const editor = @import("editor.zig");
 
 pub const std_options: std.Options = .{ .log_level = .info };
 
@@ -15,6 +17,12 @@ const usage =
     \\usage: zod server [options]
     \\       zod client [-c host] [-p port] [-n name] [-t team] [-r WxH] [-f]
     \\       zod bot [-c host] [-p port] -t team
+    \\       zod edit file.map [-n WxH] [-P planet] [-N name]
+    \\
+    \\`zod edit` edits a map; -n creates a new one of that many tiles.
+    \\Keys: M mode, O / wheel object, T team, L level, , . bridge length,
+    \\; ' health, S save, Ctrl+Z undo, Ctrl+Shift+Z redo, R ruler,
+    \\P save a picture, arrows scroll. Ctrl+click picks several tiles.
     \\
     \\`zod server` runs a game server that clients and bots connect to.
     \\
@@ -38,6 +46,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (args.len >= 2 and std.mem.eql(u8, args[1], "client")) return runClient(init, args[2..]);
     if (args.len >= 2 and std.mem.eql(u8, args[1], "bot")) return runBot(init, args[2..]);
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "edit")) return runEditor(init, args[2..]);
     if (args.len < 2 or !std.mem.eql(u8, args[1], "server")) {
         std.debug.print("{s}", .{usage});
         std.process.exit(if (args.len >= 2 and std.mem.eql(u8, args[1], "--help")) 0 else 2);
@@ -120,6 +129,48 @@ fn runClient(init: std.process.Init, args: []const [:0]const u8) !void {
     const app = try App.init(init.gpa, init.io, data_path, options);
     defer app.deinit();
     try app.run();
+}
+
+fn runEditor(init: std.process.Init, args: []const [:0]const u8) !void {
+    var options: editor.Options = .{ .path = "" };
+    var data_path: []const u8 = build_options.data_dir;
+    var size: ?[2]u16 = null;
+    var planet: game.constants.Planet = .desert;
+    var name: []const u8 = "new map";
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (arg.len == 0 or arg[0] != '-') {
+            options.path = arg;
+            continue;
+        }
+        if (i + 1 >= args.len) fail("missing value for {s}", .{arg});
+        const value = args[i + 1];
+        i += 1;
+        if (std.mem.eql(u8, arg, "-n")) {
+            const x = std.mem.indexOfScalar(u8, value, 'x') orelse fail("bad size '{s}'", .{value});
+            size = .{
+                std.fmt.parseInt(u16, value[0..x], 10) catch fail("bad size '{s}'", .{value}),
+                std.fmt.parseInt(u16, value[x + 1 ..], 10) catch fail("bad size '{s}'", .{value}),
+            };
+        } else if (std.mem.eql(u8, arg, "-P")) {
+            planet = std.meta.stringToEnum(game.constants.Planet, value) orelse fail("unknown planet '{s}'", .{value});
+        } else if (std.mem.eql(u8, arg, "-N")) {
+            name = value;
+        } else if (std.mem.eql(u8, arg, "-D")) {
+            data_path = value;
+        } else {
+            fail("unknown option '{s}'", .{arg});
+        }
+    }
+    if (options.path.len == 0) fail("which map? (zod edit file.map)", .{});
+    if (size) |s| {
+        if (s[0] == 0 or s[1] == 0) fail("a map needs at least one tile", .{});
+        options.new = .{ .width = s[0], .height = s[1], .planet = planet, .name = name };
+    }
+    const e = try editor.Editor.init(init.gpa, init.io, data_path, options);
+    defer e.deinit();
+    try e.run();
 }
 
 fn runBot(init: std.process.Init, args: []const [:0]const u8) !void {

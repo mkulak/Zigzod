@@ -235,9 +235,7 @@ pub const Renderer = struct {
     }
 
     fn updateBuilding(r: *Renderer, o: *const Object, b: *const game.object.Building, v: *Visual, terrain: *terrain_mod.Terrain, time: f64) void {
-        const s = r.sprites;
         const planet = @intFromEnum(terrain.planet);
-        const owner = @intFromEnum(o.owner);
         const destroyed = o.isDestroyed();
         v.fires.update(r.gpa, o, r.rng.random(), time);
 
@@ -280,20 +278,50 @@ pub const Renderer = struct {
         const look: Look = .{
             .destroyed = destroyed,
             .owner = o.owner,
-            .damage = if (!b.isBridge()) 0 else if (destroyed) 2 else if (o.health < o.max_health >> 1) 1 else 0,
+            .damage = bridgeDamage(o, b),
         };
         if (v.stamped) |st| if (std.meta.eql(st, look)) return;
-        const img: ?Image = switch (b.type) {
+        if (r.groundImage(o, b, v, planet)) |i| terrain.stamp(i, o.x, o.y);
+        v.stamped = look;
+    }
+
+    /// What a building paints onto the ground.
+    fn groundImage(r: *Renderer, o: *const Object, b: *const game.object.Building, v: *const Visual, planet: usize) ?Image {
+        const s = r.sprites;
+        const owner = @intFromEnum(o.owner);
+        const destroyed = o.isDestroyed();
+        return switch (b.type) {
             .fort_front => if (destroyed) s.fort.front_destroyed[planet] else s.fort.front[planet],
             .fort_back => if (destroyed) s.fort.back_destroyed[planet] else s.fort.back[planet],
             .radar => if (destroyed) s.radar.destroyed[planet] else s.radar.base[planet][owner],
             .robot_factory => if (destroyed) s.robot_factory.destroyed[planet][owner] else s.robot_factory.base[planet][owner],
             .vehicle_factory => if (destroyed) s.vehicle_factory.destroyed[planet][owner] else s.vehicle_factory.base[planet][owner],
             .repair => if (destroyed) s.repair.destroyed[planet] else s.repair.base[planet][owner],
-            .bridge_vert, .bridge_horz => if (v.bridge) |imgs| imgs[look.damage] else null,
+            .bridge_vert, .bridge_horz => if (v.bridge) |imgs| imgs[bridgeDamage(o, b)] else null,
         };
-        if (img) |i| terrain.stamp(i, o.x, o.y);
-        v.stamped = look;
+    }
+
+    /// Which bridge look: intact, damaged, destroyed.
+    fn bridgeDamage(o: *const Object, b: *const game.object.Building) u8 {
+        if (!b.isBridge()) return 0;
+        return if (o.isDestroyed()) 2 else if (o.health < o.max_health >> 1) 1 else 0;
+    }
+
+    /// An object that isn't in the world (the map editor's cursor): drawn
+    /// as it would look placed, without painting onto the ground.
+    pub fn drawPreview(r: *Renderer, cv: Canvas, world: *const World, o: *const Object) void {
+        const planet = if (r.planet) |p| @intFromEnum(p) else return;
+        switch (o.kind) {
+            .building => |*b| {
+                if (r.groundImage(o, b, r.visual(o), planet)) |img| cv.draw(img, o.x, o.y);
+                r.drawBuildingTop(cv, o, b);
+            },
+            else => {
+                const one = [_]*Object{@constCast(o)};
+                r.drawOrdered(cv, world, &one);
+            },
+        }
+        r.remove(o.ref_id);
     }
 
     /// Paint all buildings again (the ground was redrawn).
@@ -372,8 +400,7 @@ pub const Renderer = struct {
 
     /// Items and units, farther ones (by their bottom edge) first.
     pub fn draw(r: *Renderer, cv: Canvas, world: *const World, view: gfx.Rect) void {
-        const s = r.sprites;
-        const planet = if (r.planet) |p| @intFromEnum(p) else return;
+        if (r.planet == null) return;
         r.order.clearRetainingCapacity();
         for (world.objects.items) |o| {
             if (o.kind == .building or !visible(o, view, 32)) continue;
@@ -384,7 +411,13 @@ pub const Renderer = struct {
                 return a.y + a.height_pix < b.y + b.height_pix;
             }
         }.lessThan);
-        for (r.order.items) |o| {
+        r.drawOrdered(cv, world, r.order.items);
+    }
+
+    fn drawOrdered(r: *Renderer, cv: Canvas, world: *const World, list: []const *Object) void {
+        const s = r.sprites;
+        const planet = if (r.planet) |p| @intFromEnum(p) else return;
+        for (list) |o| {
             switch (o.kind) {
                 .flag => if (s.flag[@intFromEnum(o.owner)][r.visual(o).frame % 4]) |img| cv.draw(img, o.x, o.y),
                 .item => |item| switch (item) {

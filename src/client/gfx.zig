@@ -163,18 +163,69 @@ pub const Image = struct {
         return .fromArgb(img.row(y)[@intCast(x)]);
     }
 
-    /// Draw `src` (or a part of it) onto this image at (x, y).
+    /// In our ARGB layout (the screen may lack the alpha byte).
+    fn standard(img: Image) bool {
+        const f = img.surface.format.*;
+        return f.BytesPerPixel == 4 and f.Rmask == rmask and f.Gmask == gmask and f.Bmask == bmask;
+    }
+
+    fn bounds(img: Image) Rect {
+        return .{ .x = 0, .y = 0, .w = img.width(), .h = img.height() };
+    }
+
+    /// Draw `src` (or a part of it) onto this image at (x, y): blended by
+    /// its alpha, this image's alpha left as it is (like SDL's blits,
+    /// which are far slower per call on sdl12-compat).
     pub fn draw(dst: Image, src: Image, part: ?Rect, x: i32, y: i32) void {
-        var from = if (part) |p| p.sdl() else c.SDL_Rect{ .x = 0, .y = 0, .w = @intCast(src.width()), .h = @intCast(src.height()) };
-        var to: c.SDL_Rect = .{ .x = @intCast(x), .y = @intCast(y), .w = 0, .h = 0 };
-        _ = c.SDL_UpperBlit(src.surface, &from, dst.surface, &to);
+        dst.blit(src, part, x, y, false);
     }
 
     /// Copy `src` onto this image at (x, y), alpha included (no blending).
     pub fn copy(dst: Image, src: Image, x: i32, y: i32) void {
-        _ = c.SDL_SetAlpha(src.surface, 0, 255);
-        defer _ = c.SDL_SetAlpha(src.surface, c.SDL_SRCALPHA, 255);
-        dst.draw(src, null, x, y);
+        dst.blit(src, null, x, y, true);
+    }
+
+    fn blit(dst: Image, src: Image, part: ?Rect, x: i32, y: i32, raw: bool) void {
+        if (!dst.standard() or !src.standard()) {
+            if (raw) _ = c.SDL_SetAlpha(src.surface, 0, 255);
+            defer if (raw) {
+                _ = c.SDL_SetAlpha(src.surface, c.SDL_SRCALPHA, 255);
+            };
+            var from = if (part) |p| p.sdl() else src.bounds().sdl();
+            var to: c.SDL_Rect = .{ .x = @intCast(x), .y = @intCast(y), .w = 0, .h = 0 };
+            _ = c.SDL_UpperBlit(src.surface, &from, dst.surface, &to);
+            return;
+        }
+        const want = part orelse src.bounds();
+        const from = want.intersect(src.bounds()) orelse return;
+        const at_x = x + from.x - want.x;
+        const at_y = y + from.y - want.y;
+        const to = (Rect{ .x = at_x, .y = at_y, .w = from.w, .h = from.h }).intersect(dst.bounds()) orelse return;
+        const sx: usize = @intCast(from.x + to.x - at_x);
+        const sy = from.y + to.y - at_y;
+        const dx: usize = @intCast(to.x);
+        const n: usize = @intCast(to.w);
+        var j: i32 = 0;
+        while (j < to.h) : (j += 1) {
+            const s = src.row(sy + j)[sx..][0..n];
+            const d = dst.row(to.y + j)[dx..][0..n];
+            if (raw) @memcpy(d, s) else blendRow(d, s);
+        }
+    }
+
+    fn blendRow(d: []u32, s: []const u32) void {
+        for (d, s) |*dp, sp| {
+            const a = sp >> 24;
+            if (a == 0) continue;
+            if (a == 255) {
+                dp.* = (dp.* & amask) | (sp & 0xFFFFFF);
+                continue;
+            }
+            const inv = 255 - a;
+            const rb = (((sp & 0xFF00FF) * a + (dp.* & 0xFF00FF) * inv) >> 8) & 0xFF00FF;
+            const g = (((sp & 0xFF00) * a + (dp.* & 0xFF00) * inv) >> 8) & 0xFF00;
+            dp.* = (dp.* & amask) | rb | g;
+        }
     }
 
     pub fn fill(img: Image, r: ?Rect, col: Color) void {

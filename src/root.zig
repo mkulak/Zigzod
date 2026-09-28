@@ -19,6 +19,7 @@ test {
     _ = @import("server.zig");
     _ = @import("client.zig");
     _ = @import("bot.zig");
+    _ = @import("editor.zig");
     _ = @import("common.zig");
     _ = @import("ztime.zig");
     _ = @import("zencrypt_aes.zig");

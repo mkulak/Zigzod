@@ -25,7 +25,8 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
 
 ## Layout
 
-    src/main.zig          the `zod` program: `zod server`, `zod client`, `zod bot`
+    src/main.zig          the `zod` program: `zod server`, `zod client`, `zod bot`,
+                          `zod edit`
     src/game.zig          game data and rules shared by all programs
       game/constants.zig  enums (teams, unit types, ...) - wire values
       game/settings.zig   unit stats / tunables, also the SET_SETTINGS message
@@ -48,6 +49,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       server/commands.zig chat commands (/help, /changemap, ...)
       server/bots.zig     the server's own bots
     src/bot.zig           the computer player
+    src/editor.zig        the map editor
     src/client.zig        the game client
       client/session.zig  connection and game state kept in sync with the
                           server; reports what happened as events
@@ -93,9 +95,9 @@ run from the repository root.
    votes are shown; the HUD faces talk; sound and music play; the in-game
    menus change teams, bots, maps, volume, speed and pause. Missing: the
    end-of-game parade, animals, the crane's construction effect.
-4. **Bot** - done: `zod bot` joins any server, and `zod server -b team`
-   (or the Manage Bots menu) runs bots inside the server. Then the **map
-   editor**.
+4. **Bot** and **map editor** - done: `zod bot` joins any server, and
+   `zod server -b team` (or the Manage Bots menu) runs bots inside the
+   server; `zod edit file.map` edits maps, `-n WxH` makes a new one.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
 
 ## Behaviour changes
@@ -135,3 +137,12 @@ copying them (each one is noted in the commit that fixes it), e.g.:
 * the bot: a unit that found nothing to do no longer blocks the others from
   being paired with their targets; bots run inside the server instead of
   as separate processes; the two unused older AIs were not ported.
+* the map editor: placing a gun no longer also places a robot (a missing
+  `break`), howitzers and missile cannons are checked with their own size,
+  a map picture saved with P is no longer blank where objects sit, a new
+  zone is dragged out in any direction, a zone is removed by clicking
+  anywhere in it (not only its top-left tile), one mouse stroke is undone
+  at once, and what the mouse would place is drawn exactly as the game
+  will show it;
+* drawing images no longer goes through SDL's blit, which costs ~200 us a
+  call on sdl12-compat: preparing a map's ground went from 1.2 s to 6 ms.
