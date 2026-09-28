@@ -25,26 +25,43 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
 
 ## Layout
 
+    src/main.zig          the `zod` program (so far: `zod server`)
     src/game.zig          game data and rules shared by all programs
       game/constants.zig  enums (teams, unit types, ...) - wire values
       game/settings.zig   unit stats / tunables, also the SET_SETTINGS message
       game/map.zig        .map format, tile properties, zones
+      game/clock.zig      the game clock (pause, speed)
+      game/pathfinding.zig  passability grid, regions, A*
+      game/buildlist.zig  what each factory can build per level
+      game/object.zig     the object model: one struct, a tagged union for
+                          per-kind data, references by ref id
+      game/world.zig      objects, map, zones, missiles and the rules tying
+                          them together; queues messages for clients
+      game/sim.zig        the simulation step (orders, movement, combat,
+                          production) and validation of players' orders
     src/net.zig           networking
       net/protocol.zig    message ids and packed payload structs
       net/conn.zig        non-blocking framed TCP connections
+    src/server.zig        the game server
+      server/server.zig   players, handshake, messages, votes, map rotation
+      server/commands.zig chat commands (/help, /changemap, ...)
+      server/bots.zig     bots (C++ zod_engine processes for now)
 
     src/root.zig          (transitional) Zig code linked into the C++ programs:
                           common, ztime, zencrypt_aes, sdl_rotozoom, zfont
 
-`zig build test` runs all Zig unit tests. Tests that read game data run from
-the repository root.
+`zig build test` runs all Zig unit tests (including a simulated battle and a
+client talking to a server over a real socket). Tests that read game data
+run from the repository root.
 
 ## Milestones
 
-1. **Foundations** - constants, settings, map format, protocol, networking.
+1. **Foundations** - constants, settings, map format, protocol, networking. Done.
 2. **Server** - the game simulation (objects, pathfinding, combat, production,
-   zones, bots' server side, votes, commands). Validated by connecting the
-   C++ client and C++ bots to the Zig server.
+   zones, votes, commands). Done: `zod server` replaces the C++ dedicated
+   server; the C++ client and C++ bots (`zod_engine -c host -b team`) play on
+   it. The C++ server code is still built because `zod_engine` without `-c`
+   starts one in-process.
 3. **Client** - rendering (SDL/OpenGL), HUD, menus, sound and music.
 4. **Bot**, then **map editor**.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
@@ -59,3 +76,12 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   that shifts when someone disconnects;
 * image scaling no longer reads outside images, and font rendering handles
   bytes above 127.
+* path finding runs synchronously instead of in threads (it is fast enough
+  with a binary heap);
+* without user accounts every player has one vote; the original, without its
+  MySQL database, let any single player decide every vote;
+* a DODGE waypoint sent by a client became an ATTACK order; dodge directions
+  could be NaN; a destroyed back fort did not stop buildings in its zone from
+  repairing themselves;
+* new units get their factory's rally points before they are announced, so
+  clients see the full route.

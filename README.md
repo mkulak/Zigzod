@@ -36,7 +36,7 @@ It does not need Qt, wxWidgets or MySQL.
        ./macos/build_deps.sh
 
 3. Build and play:
-       zig build                  # -> zig-out/bin/zod_engine, zig-out/bin/zod_map_editor
+       zig build                  # -> zig-out/bin/zod_engine, zod_map_editor and zod
        zig build run              # campaign in an 800x600 window, you = red vs blue bot
        zig build run -- -h        # all game options (anything after -- replaces the defaults)
        zig build run -- -l map_list.txt -t red -b blue -w -o     # e.g. without OpenGL
@@ -44,6 +44,11 @@ It does not need Qt, wxWidgets or MySQL.
        zig build test             # unit tests of the Zig modules
 
    ./macos/run_zod.sh [--editor] [options] runs the built programs the same way.
+
+   The game server has been ported to Zig (zig-out/bin/zod). To play on it:
+       zig build run-server -- -l map_list.txt -b blue     # in one terminal
+       ./zig-out/bin/zod_engine -c localhost -t red -w     # in another
+   or just ./macos/run_zod.sh --zig-server. 'zod server -h' lists its options.
 
    The game data lives in bin/, and relative map paths are relative to bin/.
    The programs in zig-out/bin/ can also be started from any directory; they
