@@ -181,6 +181,8 @@ pub const Portrait = struct {
     /// Blinks and glances while idle.
     idle_anims: bool = true,
     next_idle: f64 = 0,
+    /// Started talking (the app plays the line and clears this).
+    said: ?Anim = null,
 
     /// Show the robot of `o` (a robot, or the driver of a vehicle or gun).
     pub fn show(p: *Portrait, o: ?*const Object) void {
@@ -208,6 +210,7 @@ pub const Portrait = struct {
         if (frames.anims[@intFromEnum(anim)].len == 0) return;
         p.anim = anim;
         p.start = time;
+        p.said = anim;
     }
 
     pub fn busy(p: *const Portrait) bool {

@@ -64,6 +64,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/messages.zig news and chat lines, computer messages, vote box
       client/portrait.zig the talking faces in the HUD
       client/portrait_frames.zig  their animation frames (data)
+      client/sound.zig    sound effects, voices, music
       client/app.zig      window, main loop, camera
 
     src/root.zig          (transitional) Zig code linked into the C++ programs:
@@ -86,7 +87,8 @@ run from the repository root.
    map, all objects with their animations and the effects, has the HUD and
    minimap, units can be selected and ordered, and production is run from
    the building windows and the factory list; news, computer messages and
-   votes are shown; the HUD faces talk. Missing: menus, sound.
+   votes are shown; the HUD faces talk; sound and music play. Missing:
+   the menus.
 4. **Bot**, then **map editor**.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
 
@@ -117,4 +119,7 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   whatever the frame rate; the HUD clock shows the game time; a gun being
   placed is dimmed where it can't go; news lines have the color the server
   gives them (the C++ client drew all of them white); computer messages
-  blink on one clock (the C++ mixed real and game time).
+  blink on one clock (the C++ mixed real and game time);
+* the "you're losing" warnings play (the C++ looked for comp_youre_losing_0.wav
+  instead of comp_youre_losing_00.wav), and factories hum whether they make
+  robots or vehicles.

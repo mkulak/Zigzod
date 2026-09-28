@@ -205,6 +205,7 @@ fn updateCannon(o: *const Object, kind: k.Cannon, v: *UnitVisual, target: ?*Obje
             const bullet_y = [8]i32{ -3, -16, -18, -16, -3, 10, 13, 10 };
             const p = u.fx.pointOn(tg);
             u.fx.bullet(o.owner, o.center_x + bullet_x[v.direction], o.center_y - 7 + bullet_y[v.direction], p[0], p[1]);
+            u.fx.soundOf(.gatling_fire, o);
         }
         return;
     };
@@ -273,6 +274,7 @@ fn updateVehicle(o: *const Object, kind: k.Vehicle, lid_open: bool, v: *UnitVisu
                         const y = o.y + turret_y[v.direction] + shift_y[v.turret] + bullet_y[v.turret] - @intFromBool(v.jeep_bounce);
                         const p = u.fx.pointOn(tg);
                         u.fx.bullet(o.owner, x, y, p[0], p[1]);
+                        u.fx.soundOf(.jeep_fire, o);
                     }
                 }
             } else if (t >= v.next_turret_time) {
@@ -294,9 +296,18 @@ fn updateVehicle(o: *const Object, kind: k.Vehicle, lid_open: bool, v: *UnitVisu
                     next.* = t + o.damage_interval + 0.012 * @as(f64, @floatFromInt(u.rng.uintLessThan(u32, 10)));
                     const p = u.fx.pointOn(tg);
                     switch (o.driver_type) {
-                        .grunt, .psycho, .sniper => u.fx.bullet(o.owner, o.x + 16, o.y + 16, p[0], p[1]),
-                        .pyro => u.fx.flame(o.x + 16, o.y + 16, p[0], p[1]),
-                        .laser => u.fx.laser(o.x + 16, o.y + 16, p[0], p[1]),
+                        .grunt, .psycho, .sniper => {
+                            u.fx.bullet(o.owner, o.x + 16, o.y + 16, p[0], p[1]);
+                            u.fx.soundOf(.rifle_fire, o);
+                        },
+                        .pyro => {
+                            u.fx.flame(o.x + 16, o.y + 16, p[0], p[1]);
+                            u.fx.soundOf(.pyro_fire, o);
+                        },
+                        .laser => {
+                            u.fx.laser(o.x + 16, o.y + 16, p[0], p[1]);
+                            u.fx.soundOf(.laser_fire, o);
+                        },
                         .tough => {},
                     }
                 }
@@ -401,6 +412,12 @@ fn updateRobot(o: *const Object, kind: k.Robot, v: *UnitVisual, target: ?*Object
                 .laser => u.fx.laser(o.x + 8 + m[0], o.y + 8 + m[1], p[0], p[1]),
                 else => u.fx.bullet(o.owner, o.x + 8, o.y + 8, p[0], p[1]),
             }
+            u.fx.soundOf(switch (kind) {
+                .pyro => .pyro_fire,
+                .laser => .laser_fire,
+                .psycho => .psycho_fire,
+                else => .rifle_fire,
+            }, o);
         }
     };
     switch (kind) {

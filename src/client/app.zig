@@ -17,6 +17,7 @@ const drawSelectionBox = @import("control.zig").drawSelectionBox;
 const windows = @import("windows.zig");
 const messages = @import("messages.zig");
 const portrait = @import("portrait.zig");
+const sound = @import("sound.zig");
 const Session = @import("session.zig").Session;
 
 const k = game.constants;
@@ -60,6 +61,10 @@ pub const App = struct {
     msg_images: messages.Images,
     news: messages.News,
     notices: messages.Notices = .{},
+    sounds: sound.Sounds = .{},
+    /// Spoken warnings: fort under attack, losing.
+    next_fort_warning: f64 = 0,
+    next_losing_warning: f64 = 0,
     factory_list: windows.FactoryList = .{},
     left_on_list: bool = false,
     /// The production window of one of our buildings.
@@ -164,6 +169,7 @@ pub const App = struct {
         app.window_images = .load(assets);
         app.list_images = .load(assets);
         app.msg_images = .load(assets);
+        app.sounds.init(assets);
         _ = c.SDL_ShowCursor(c.SDL_DISABLE);
         app.sprites = try Sprites.load(gpa, assets, &app.palettes);
         app.fx = Effects.init(gpa, app.sprites, &app.palettes, app.prng.random());
@@ -183,6 +189,7 @@ pub const App = struct {
         app.window_images.deinit();
         app.list_images.deinit();
         app.msg_images.deinit();
+        app.sounds.deinit();
         app.news.deinit();
         app.control.deinit();
         if (app.chat) |*t| t.deinit(gpa);
@@ -233,6 +240,7 @@ pub const App = struct {
                 app.fx.reset();
                 app.hud.reset();
                 app.hud.setMap(m);
+                app.sounds.music.start(m.planet());
                 app.closeWindow();
                 app.placing = null;
                 app.control.reset(app.session.team);
@@ -246,17 +254,13 @@ pub const App = struct {
             .team_changed => |id| if (app.session.find(id)) |o| {
                 if (o.owner != app.control.team) app.control.forget(id);
             },
-            .comp_msg => |m| switch (@as(net.protocol.CompSound, @enumFromInt(m.sound))) {
-                .vehicle, .robot => |snd| {
-                    app.control.notice(.{ .id = m.ref_id, .select = true, .time = app.realTime() });
-                    app.notices.show(if (snd == .robot) .robot_manufactured else .vehicle_manufactured, m.ref_id, app.realTime());
-                },
-                .gun => {
-                    app.control.notice(.{ .id = m.ref_id, .open_gui = true, .time = app.realTime() });
-                    app.notices.show(.gun_manufactured, m.ref_id, app.realTime());
-                },
-                .vehicle_repaired => app.control.notice(.{ .id = m.ref_id, .time = app.realTime() }),
-                else => {},
+            .comp_msg => |m| {
+                const snd = @as(net.protocol.CompSound, @enumFromInt(m.sound));
+                const idx = @intFromEnum(snd) - @intFromEnum(net.protocol.CompSound.vehicle);
+                // (Repair messages are voiced with the repair animation.)
+                const voiced = snd != .starting_repair and snd != .vehicle_repaired;
+                if (voiced and idx >= 0 and idx < @typeInfo(sound.Computer).@"enum".fields.len) app.sounds.announce(@enumFromInt(idx), app.realTime(), app.prng.random());
+                app.compMsg(m, snd);
             },
             .portrait_anim => |pa| if (app.session.find(pa.ref_id)) |o| {
                 if (o.owner == app.control.team) {
@@ -287,6 +291,7 @@ pub const App = struct {
             },
             .crane_anim => |ca| if (app.session.find(ca.ref_id)) |o| app.objects.craneAnim(o, ca.on),
             .repair_anim => |ra| if (app.session.find(ra.ref_id)) |o| {
+                if (o.owner == app.control.team and o.owner != .none) app.sounds.announce(if (ra.on) .starting_repair else .vehicle_repaired, app.realTime(), app.prng.random());
                 app.objects.repairAnim(o, ra.on, ra.remaining_time, app.session.world.now());
             },
             .new_object => |id| if (!app.focused) {
@@ -608,6 +613,21 @@ pub const App = struct {
         }
     }
 
+    fn compMsg(app: *App, m: net.protocol.ComputerMsg, snd: net.protocol.CompSound) void {
+        switch (snd) {
+            .vehicle, .robot => |which| {
+                app.control.notice(.{ .id = m.ref_id, .select = true, .time = app.realTime() });
+                app.notices.show(if (which == .robot) .robot_manufactured else .vehicle_manufactured, m.ref_id, app.realTime());
+            },
+            .gun => {
+                app.control.notice(.{ .id = m.ref_id, .open_gui = true, .time = app.realTime() });
+                app.notices.show(.gun_manufactured, m.ref_id, app.realTime());
+            },
+            .vehicle_repaired => app.control.notice(.{ .id = m.ref_id, .time = app.realTime() }),
+            else => {},
+        }
+    }
+
     /// Send queued orders; the HUD's unit acknowledges them.
     fn sendOrders(app: *App) !void {
         const sent = try app.control.sendOrders(&app.session, app.keys.z, app.prng.random()) orelse return;
@@ -731,6 +751,105 @@ pub const App = struct {
     // Drawing
     // -----------------------------------------------------------------------
 
+    /// Sounds of this frame: effects on screen, faces talking, building
+    /// loops, music and spoken warnings.
+    fn playSounds(app: *App, world: *const game.world.World, v: gfx.Rect, now: f64) void {
+        const rng = app.prng.random();
+        for (app.fx.sounds.items) |h| {
+            const r = h.where;
+            if (r.x > v.x + v.w or r.y > v.y + v.h or r.x + r.w < v.x or r.y + r.h < v.y) continue;
+            app.sounds.effect(h.sound, now, rng);
+        }
+        app.fx.sounds.clearRetainingCapacity();
+        for ([_]*portrait.Portrait{ &app.hud.portrait, &app.hud.alert_portrait }) |p| if (p.said) |a| {
+            p.said = null;
+            app.sounds.speak(a, now, rng);
+        };
+
+        // Radars and working factories hum while in view.
+        var radar = false;
+        var factory = false;
+        var fort: ?*const Object = null;
+        for (world.objects.items) |o| {
+            const b = switch (o.kind) {
+                .building => |*b| b,
+                else => continue,
+            };
+            if (o.isFort() and o.owner == app.control.team and o.owner != .none) fort = o;
+            if (o.isDestroyed() or o.owner == .none) continue;
+            if (o.x > v.x + v.w or o.y > v.y + v.h or o.x + o.width_pix < v.x or o.y + o.height_pix < v.y) continue;
+            if (b.type == .radar) radar = true;
+            if ((b.type == .robot_factory or b.type == .vehicle_factory) and b.state != .select) factory = true;
+        }
+        app.sounds.loop(.radar, radar);
+        app.sounds.loop(.factory, factory);
+
+        // How dangerous it is: enemies near our fort, or fighting.
+        var danger: sound.Danger = .calm;
+        if (fort) |f| if (!f.isDestroyed()) {
+            for (world.objects.items) |o| {
+                if (o.owner == .none or o.owner == app.control.team) continue;
+                if (o.kind == .building or o.kind == .item) continue;
+                const dx: i64 = o.center_x - f.center_x;
+                const dy: i64 = o.center_y - f.center_y;
+                if (dx * dx + dy * dy <= 250 * 250) {
+                    danger = .fort;
+                    break;
+                }
+            }
+            if (danger == .calm) for (world.objects.items) |o| {
+                const t = world.findOpt(o.attack_target) orelse continue;
+                if (t.owner == app.control.team or (o.owner == app.control.team and t.owner != .none)) {
+                    danger = .attacking;
+                    break;
+                }
+            };
+        };
+        app.sounds.music.update(danger, if (fort) |f| f.isDestroyed() else false, now, rng);
+        app.speakWarnings(world, fort, now);
+    }
+
+    /// "Fort under attack" while the music says so, and "you're losing"
+    /// when well behind in units and land (ProcessVerbalWarnings).
+    fn speakWarnings(app: *App, world: *const game.world.World, fort: ?*const Object, now: f64) void {
+        const team = app.control.team;
+        if (team == .none) return;
+        var units: [k.Team.count]u32 = @splat(0);
+        for (world.objects.items) |o| {
+            if (o.isUnit()) units[@intFromEnum(o.owner)] += 1;
+        }
+        if (units[@intFromEnum(team)] == 0) return;
+        const rng = app.prng.random();
+        if (app.sounds.music.danger == .fort and now >= app.next_fort_warning) if (fort) |f| {
+            app.next_fort_warning = now + 10;
+            app.sounds.announce(.fort_under_attack, now, rng);
+            app.notices.show(.fort_under_attack, f.ref_id, now);
+            app.control.notice(.{ .id = f.ref_id, .time = now });
+        };
+        if (now < app.next_losing_warning) return;
+        var zones: [k.Team.count]u32 = @splat(0);
+        for (world.zones.items) |z| zones[@intFromEnum(z.owner)] += 1;
+        // The weakest other team with units.
+        var worst_units: ?u32 = null;
+        var worst_zones: u32 = 0;
+        for (1..k.Team.count) |i| {
+            if (i == @intFromEnum(team) or units[i] == 0) continue;
+            if (worst_units == null) {
+                worst_units = units[i];
+                worst_zones = zones[i];
+                continue;
+            }
+            worst_units = @min(worst_units.?, units[i]);
+            worst_zones = @min(worst_zones, zones[i]);
+        }
+        const ours = @as(f64, @floatFromInt(units[@intFromEnum(team)])) * 1.7;
+        const our_zones = @as(f64, @floatFromInt(zones[@intFromEnum(team)])) * 1.7;
+        if (worst_units) |wu| if (@as(f64, @floatFromInt(wu)) > ours and @as(f64, @floatFromInt(worst_zones)) > our_zones) {
+            app.next_losing_warning = now + 8;
+            app.sounds.losing(now, rng);
+        };
+    }
+
     /// The vote in progress, as shown in its box (the server gives every
     /// player one vote).
     fn voteBox(app: *App) ?messages.Notices.Vote {
@@ -821,6 +940,7 @@ pub const App = struct {
             app.hud.update(world, time, now, app.prng.random());
             // The HUD shows a new unit: it reports.
             if (app.control.hud_unit != app.hud.portrait.ref_id) app.hud.showUnit(world.findOpt(app.control.hud_unit), now, app.prng.random());
+            app.playSounds(world, v, now);
             app.hud.draw(app.screen, .{
                 .world = world,
                 .team = app.session.team,

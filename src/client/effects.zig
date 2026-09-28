@@ -13,6 +13,7 @@ const gfx = @import("gfx.zig");
 const sprites = @import("sprites.zig");
 const Terrain = @import("terrain.zig").Terrain;
 const rotozoom = @import("../sdl_rotozoom.zig");
+const SoundEffect = @import("sound.zig").Effect;
 
 const k = game.constants;
 const Object = game.object.Object;
@@ -385,6 +386,8 @@ pub const Effects = struct {
     air: std.ArrayList(Effect) = .empty,
     /// Effects spawned while updating, added afterwards.
     spawned: std.ArrayList(Effect) = .empty,
+    /// Sounds made, with where (the app plays those on screen).
+    sounds: std.ArrayList(Heard) = .empty,
     time: f64 = 0,
     planet: k.Planet = .desert,
     /// From the server's settings.
@@ -399,6 +402,23 @@ pub const Effects = struct {
         fx.ground.deinit(fx.gpa);
         fx.air.deinit(fx.gpa);
         fx.spawned.deinit(fx.gpa);
+        fx.sounds.deinit(fx.gpa);
+    }
+
+    pub const Heard = struct { sound: SoundEffect, where: gfx.Rect };
+
+    /// A sound from the area `where` (map coordinates).
+    pub fn sound(fx: *Effects, e: SoundEffect, where: gfx.Rect) void {
+        fx.sounds.append(fx.gpa, .{ .sound = e, .where = where }) catch {};
+    }
+
+    fn soundAt(fx: *Effects, e: SoundEffect, x: i32, y: i32) void {
+        fx.sound(e, .{ .x = x, .y = y, .w = 0, .h = 0 });
+    }
+
+    /// A sound from an object's area.
+    pub fn soundOf(fx: *Effects, e: SoundEffect, o: *const Object) void {
+        fx.sound(e, .{ .x = o.x, .y = o.y, .w = o.width_pix, .h = o.height_pix });
     }
 
     pub fn reset(fx: *Effects) void {
@@ -823,6 +843,12 @@ pub const Effects = struct {
                     .missile_cannon => fx.rocket(.missile_cannon, sx, sy, x, y, .{ .speed = o.missile_speed, .particle_radius = o.damage_radius }),
                     .gatling => {},
                 }
+                fx.soundOf(switch (cn.type) {
+                    .gun => .gun_fire,
+                    .howitzer => .heavy_fire,
+                    .missile_cannon => .missile_fire,
+                    .gatling => .gatling_fire,
+                }, o);
             },
             .vehicle => |veh| {
                 const sx = o.x + 17 + mx[turret_direction];
@@ -833,6 +859,7 @@ pub const Effects = struct {
                     .heavy => fx.rocket(.light, sx, sy, x, y, .{ .speed = o.missile_speed, .large = 1, .xx_large = 1 }),
                     .missile_launcher => fx.rocket(.launcher, sx, sy, x, y, .{ .speed = o.missile_speed, .particle_radius = o.damage_radius }),
                     .apc => if (target) |tg| {
+                        fx.soundOf(.tough_fire, o);
                         // One rocket for each tough inside.
                         fx.rocket(.tough, o.x + 16, o.y + 16, x, y, .{ .speed = o.missile_speed });
                         for (1..o.drivers.items.len) |_| {
@@ -842,11 +869,19 @@ pub const Effects = struct {
                     },
                     else => {},
                 }
+                switch (veh.type) {
+                    .light => fx.soundOf(.light_fire, o),
+                    .medium => fx.soundOf(.medium_fire, o),
+                    .heavy => fx.soundOf(.heavy_fire, o),
+                    .missile_launcher => fx.soundOf(.missile_fire, o),
+                    else => {},
+                }
             },
             .robot => if (tough_rocket) {
                 if (target != null) {
                     const d = robotMuzzle(direction);
                     fx.rocket(.tough, o.x + 8 + d[0], o.y + 8 + d[1], x, y, .{ .speed = o.missile_speed });
+                    fx.soundOf(.tough_fire, o);
                 }
             } else {
                 // A grenade.
@@ -854,6 +889,7 @@ pub const Effects = struct {
                 const dy: f64 = @floatFromInt(o.center_y - y);
                 const speed: f64 = @floatFromInt(@max(fx.grenade_speed, 1));
                 fx.turret(.grenade, .none, o.center_x + 2, o.center_y + 2, x, y, @sqrt(dx * dx + dy * dy) / speed);
+                fx.soundOf(.throw_grenade, o);
             },
             else => {},
         }
@@ -947,6 +983,7 @@ pub const Effects = struct {
 
     fn buildingExplosion(fx: *Effects, o: *const Object, kind: k.Building) void {
         const box = effectsBox(o);
+        fx.soundOf(.explosion, o);
         // Fireballs, then pieces: counts and flight times per building.
         const balls: u32, const balls_spread: u32, const pieces: u32, const pieces_spread: u32, const flight: f64 = switch (kind) {
             .fort_front, .fort_back => .{ 12, 6, 16, 6, 3 },
@@ -1015,6 +1052,7 @@ pub const Effects = struct {
         switch (e.*) {
             .bullet => |b| if (t >= b.line.t1) {
                 for (0..fx.count(0, 3)) |_| fx.particle(int(b.line.end.x), int(b.line.end.y), 25, 25);
+                fx.soundAt(.ricochet, int(b.line.end.x), int(b.line.end.y));
                 return false;
             },
             .beam => |*b| if (t >= b.line.t1) {
@@ -1079,6 +1117,7 @@ pub const Effects = struct {
                     const lift = p.arc.lift(t) + 1;
                     fx.sparks(int(at.x) + 16, int(at.y - lift * 30 + 30) + 16, 30, 30);
                     if (ctx.terrain) |tr| tr.crater(fx.rng, ex, ey, false, 0.35);
+                    fx.soundAt(.turret_explosion, ex, ey);
                     return false;
                 }
                 if (p.frames.tick(t) and p.frames.i >= p.piece.frames()) p.frames.i = 0;
@@ -1088,6 +1127,7 @@ pub const Effects = struct {
                 const dy = int(p.dest.y);
                 fx.mushroom(dx, dy, 1.0);
                 for (0..fx.count(10, 8)) |_| fx.particle(dx, dy, 65, 55);
+                fx.soundAt(.turret_explosion, int(p.arc.line.end.x), int(p.arc.line.end.y));
                 return false;
             },
             .wreck => |*w| {
@@ -1129,6 +1169,7 @@ pub const Effects = struct {
         }
         const ex = int(r.line.end.x);
         const ey = int(r.line.end.y);
+        fx.soundAt(.explosion, ex, ey);
         switch (r.kind) {
             .light => {
                 const e = r.extra;
