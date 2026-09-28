@@ -14,6 +14,7 @@ const hud_mod = @import("hud.zig");
 const cursor = @import("cursor.zig");
 const Control = @import("control.zig").Control;
 const drawSelectionBox = @import("control.zig").drawSelectionBox;
+const windows = @import("windows.zig");
 const Session = @import("session.zig").Session;
 
 const k = game.constants;
@@ -52,6 +53,14 @@ pub const App = struct {
     hud: hud_mod.Hud,
     cursors: cursor.Cursors,
     control: Control,
+    window_images: windows.Images,
+    list_images: windows.ListImages,
+    factory_list: windows.FactoryList = .{},
+    left_on_list: bool = false,
+    /// The production window of one of our buildings.
+    window: ?windows.Production = null,
+    /// Placing a finished gun from this building.
+    placing: ?struct { building: i32, gun: k.Cannon } = null,
     session: Session,
     prng: std.Random.DefaultPrng,
     clock_origin: std.Io.Timestamp,
@@ -76,6 +85,7 @@ pub const App = struct {
     /// pressed on the HUD.
     drag: ?[2]i32 = null,
     left_on_hud: bool = false,
+    left_on_window: bool = false,
     /// Middle button drags the map.
     middle: ?[2]i32 = null,
     /// The camera glides to this view position.
@@ -134,6 +144,8 @@ pub const App = struct {
             .hud = undefined,
             .cursors = undefined,
             .control = .init(gpa),
+            .window_images = undefined,
+            .list_images = undefined,
             .session = Session.init(gpa, conn, terrain_info, .{ .name = options.name, .team = options.team }),
             .prng = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
             .clock_origin = std.Io.Clock.awake.now(io),
@@ -142,6 +154,8 @@ pub const App = struct {
         app.fonts = font.Fonts.load(assets);
         app.hud = .init(assets, &app.palettes, &app.fonts);
         app.cursors = .load(assets, &app.palettes);
+        app.window_images = .load(assets);
+        app.list_images = .load(assets);
         _ = c.SDL_ShowCursor(c.SDL_DISABLE);
         app.sprites = try Sprites.load(gpa, assets, &app.palettes);
         app.fx = Effects.init(gpa, app.sprites, &app.palettes, app.prng.random());
@@ -157,6 +171,9 @@ pub const App = struct {
         app.fx.deinit();
         app.hud.deinit();
         app.cursors.deinit();
+        app.closeWindow();
+        app.window_images.deinit();
+        app.list_images.deinit();
         app.control.deinit();
         if (app.chat) |*t| t.deinit(gpa);
         app.sprites.deinit();
@@ -206,6 +223,8 @@ pub const App = struct {
                 app.fx.reset();
                 app.hud.reset();
                 app.hud.setMap(m);
+                app.closeWindow();
+                app.placing = null;
                 app.control.reset(app.session.team);
                 app.objects.our_team = app.session.team;
                 app.objects.setMap(m, app.terrain_info) catch {};
@@ -261,6 +280,8 @@ pub const App = struct {
                 app.objects.reset();
                 app.fx.reset();
                 app.hud.reset();
+                app.closeWindow();
+                app.placing = null;
                 app.control.reset(app.session.team);
             },
             .news => |n| std.log.info("news: {s}", .{n.text}),
@@ -404,10 +425,40 @@ pub const App = struct {
                     }
                     return;
                 }
+                if (!app.overMap(app.mouse_x, app.mouse_y)) return;
+                // Placing a gun happens on release.
+                if (app.placing != null) return;
+                var jump: ?i32 = null;
+                if (app.factory_list.press(world, app.control.team, &app.list_images, app.mapArea(), app.mouse_x, app.mouse_y, &jump)) {
+                    app.left_on_list = true;
+                    if (jump) |id| if (world.find(id)) |o| {
+                        app.lookAt(o.center_x, o.center_y);
+                        _ = app.openWindow(o);
+                    };
+                    return;
+                }
+                const p = app.mouseMap();
+                if (app.window) |*w| {
+                    if (w.contains(p[0], p[1])) {
+                        w.press(world, &app.window_images, p[0], p[1]);
+                        app.left_on_window = true;
+                        return;
+                    }
+                    app.closeWindow();
+                }
+                // Clicking one of our production buildings (with no unit of
+                // ours there to select) opens its window.
+                if (app.control.hover) |h| if (!app.unitOfOursAt(p)) {
+                    if (world.find(h.id)) |o| if (app.openWindow(o)) return;
+                };
                 app.control.clear(world, rng);
-                app.drag = app.mouseMap();
+                app.drag = p;
             },
             c.SDL_BUTTON_MIDDLE => app.middle = .{ app.mouse_x, app.mouse_y },
+            c.SDL_BUTTON_WHEELUP, c.SDL_BUTTON_WHEELDOWN => {
+                const up = button == c.SDL_BUTTON_WHEELUP;
+                if (app.window) |*w| w.wheel(world, up) else if (app.factory_list.shown) app.factory_list.scroll(!up);
+            },
             else => {},
         }
     }
@@ -422,6 +473,30 @@ pub const App = struct {
                     switch (app.hud.release(app.width, app.height, app.mouse_x, app.mouse_y)) {
                         .button => |b| app.hudButton(b),
                         else => {},
+                    }
+                    return;
+                }
+                if (app.placing) |pl| {
+                    app.placing = null;
+                    const p = app.mouseMap();
+                    try app.session.sendPacket(.place_cannon, net.protocol.PlaceCannon{
+                        .ref_id = pl.building,
+                        .tx = @divFloor(p[0], k.tile_size),
+                        .ty = @divFloor(p[1], k.tile_size),
+                        .oid = @intFromEnum(pl.gun),
+                    });
+                    return;
+                }
+                if (app.left_on_list) {
+                    app.left_on_list = false;
+                    app.factory_list.release();
+                    return;
+                }
+                if (app.left_on_window) {
+                    app.left_on_window = false;
+                    if (app.window) |*w| {
+                        const p = app.mouseMap();
+                        try app.windowAction(w.building, w.release(world, &app.window_images, p[0], p[1]));
                     }
                     return;
                 }
@@ -456,11 +531,56 @@ pub const App = struct {
         try app.control.sendOrders(&app.session, app.keys.z, app.prng.random());
     }
 
+    /// A selectable unit of ours under map point `p` (clicking there selects
+    /// rather than opening a window).
+    fn unitOfOursAt(app: *App, p: [2]i32) bool {
+        for (app.session.world.objects.items) |o| {
+            const u = app.session.world.findOpt(o.leader) orelse o;
+            if (u.owner == app.control.team and u.selectable and o.withinSelection(p[0], p[0] + 1, p[1], p[1] + 1)) return true;
+        }
+        return false;
+    }
+
+    fn openWindow(app: *App, o: *const Object) bool {
+        if (o.owner != app.control.team or o.owner == .none) return false;
+        const m = &(app.session.world.map orelse return false);
+        app.closeWindow();
+        app.window = windows.Production.open(app.gpa, o, m) orelse return false;
+        app.control.rally_for = o.ref_id;
+        return true;
+    }
+
+    fn closeWindow(app: *App) void {
+        if (app.window) |*w| w.deinit();
+        app.window = null;
+        app.control.rally_for = null;
+    }
+
+    fn windowAction(app: *App, building: i32, action: windows.Action) !void {
+        const P = net.protocol;
+        switch (action) {
+            .none => {},
+            .close => app.closeWindow(),
+            .start => |u| try app.session.sendPacket(.start_building, P.StartBuilding{ .ref_id = building, .ot = @intFromEnum(u.kind), .oid = u.id }),
+            .stop => try app.session.sendPacket(.stop_building, P.Int{ .value = building }),
+            .enqueue => |u| try app.session.sendPacket(.add_building_queue, P.AddBuildingQueue{ .ref_id = building, .ot = @intFromEnum(u.kind), .oid = u.id }),
+            .dequeue => |d| try app.session.sendPacket(.cancel_building_queue, P.CancelBuildingQueue{ .ref_id = building, .list_i = @intCast(d.index), .ot = @intFromEnum(d.unit.kind), .oid = d.unit.id }),
+            .place => |gun| {
+                app.closeWindow();
+                app.placing = .{ .building = building, .gun = gun };
+            },
+        }
+    }
+
     fn hudButton(app: *App, b: hud_mod.Button) void {
         const kind: @import("control.zig").UnitKind = switch (b) {
             .r => .robot,
             .v => .vehicle,
             .g => .cannon,
+            .b => {
+                app.factory_list.shown = !app.factory_list.shown;
+                return;
+            },
             else => return,
         };
         app.selectNext(kind);
@@ -538,11 +658,15 @@ pub const App = struct {
             'r', 'R' => app.selectNext(.robot),
             'v', 'V' => if (!app.keys.alt) app.selectNext(.vehicle),
             'g', 'G' => app.selectNext(.cannon),
+            'b', 'B' => app.factory_list.shown = !app.factory_list.shown,
             22 => app.control.selectAll(world, .vehicle, rng), // ctrl+v
             18 => app.control.selectAll(world, .robot, rng), // ctrl+r
             3 => app.control.selectAll(world, .cannon, rng), // ctrl+c
             1 => app.control.selectAll(world, null, rng), // ctrl+a
-            ' ' => if (app.control.nextNotice(world, app.realTime(), rng)) |o| app.lookAt(o.center_x, o.center_y),
+            ' ' => if (app.control.nextNotice(world, app.realTime(), rng)) |n| {
+                app.lookAt(n.obj.center_x, n.obj.center_y);
+                if (n.open_gui) _ = app.openWindow(n.obj);
+            },
             else => {},
         }
     }
@@ -564,6 +688,17 @@ pub const App = struct {
     // Drawing
     // -----------------------------------------------------------------------
 
+    /// The gun being placed, on the tile under the mouse (dimmed where it
+    /// can't go).
+    fn drawPlacing(app: *App, cv: gfx.Canvas, world: *const game.world.World, building: i32, gun: k.Cannon) void {
+        const img = app.sprites.cannon[@intFromEnum(gun)].passive[@intFromEnum(app.control.team)][4] orelse return;
+        const p = app.mouseMap();
+        const tx = @divFloor(p[0], k.tile_size);
+        const ty = @divFloor(p[1], k.tile_size);
+        const ok = if (world.find(building)) |b| world.cannonPlacable(b, tx, ty) else false;
+        cv.drawAlpha(img, tx * k.tile_size, ty * k.tile_size, if (ok) 255 else 110);
+    }
+
     fn render(app: *App, now: f64) void {
         const black: gfx.Color = .{ .r = 0, .g = 0, .b = 0 };
         app.screen.fill(null, black);
@@ -571,7 +706,11 @@ pub const App = struct {
         const cv: gfx.Canvas = .{ .target = app.screen, .clip = area, .dx = -app.view_x, .dy = -app.view_y };
         const v = app.view();
         const world = &app.session.world;
-        if (app.control.team != app.session.team) app.control.reset(app.session.team);
+        if (app.control.team != app.session.team) {
+            app.closeWindow();
+            app.control.reset(app.session.team);
+        }
+        app.session.world.checkUnitLimitReached();
 
         if (app.terrain) |*t| {
             const time = world.now();
@@ -585,12 +724,22 @@ pub const App = struct {
             app.objects.drawAfter(cv, world, v);
             app.fx.draw(cv, v);
             app.control.drawSelection(cv, world, &app.palettes, &app.fonts, time);
+            if (app.window) |*w| {
+                // Gone, or no longer ours.
+                const b = world.find(w.building);
+                if (b == null or b.?.owner != app.control.team) app.closeWindow();
+            }
+            if (app.window) |*w| w.draw(cv, world, &app.window_images, app.sprites, &app.fonts, &app.fx, app.prng.random());
+            if (app.placing) |pl| app.drawPlacing(cv, world, pl.building, pl.gun);
             if (app.drag) |d| {
                 const p = app.mouseMap();
                 drawSelectionBox(cv, &app.palettes, app.control.team, d[0], d[1], p[0], p[1], time);
                 // The box selects as it grows.
                 app.control.selectBox(world, d[0], d[1], p[0], p[1], app.prng.random());
             }
+
+            const screen_map: gfx.Canvas = .{ .target = app.screen, .clip = area };
+            app.factory_list.draw(screen_map, world, app.control.team, &app.list_images, &app.fonts, area);
 
             app.hud.updateButtons(world, app.session.team);
             app.hud.update(world, time);

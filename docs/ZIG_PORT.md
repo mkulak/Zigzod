@@ -59,6 +59,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/hud.zig      side panel, bottom bar, buttons, minimap
       client/cursor.zig   mouse cursors
       client/control.zig  selecting units, control groups, giving orders
+      client/windows.zig  production window, factory list
       client/app.zig      window, main loop, camera
 
     src/root.zig          (transitional) Zig code linked into the C++ programs:
@@ -79,8 +80,9 @@ run from the repository root.
 3. **Client** - rendering (SDL/OpenGL), HUD, menus, sound and music.
    In progress: `zod client` connects, keeps the game in sync, draws the
    map, all objects with their animations and the effects, has the HUD and
-   minimap, and units can be selected and ordered. Missing: building
-   windows (production, placing guns), portraits, messages, menus, sound.
+   minimap, units can be selected and ordered, and production is run from
+   the building windows and the factory list. Missing: portraits, messages,
+   menus, sound.
 4. **Bot**, then **map editor**.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
 
@@ -108,4 +110,5 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   kept stale when the angle or size did);
 * the selection's abilities are recomputed from scratch (a crane leaving the
   selection left "can repair" set); the camera glides at the same speed
-  whatever the frame rate; the HUD clock shows the game time.
+  whatever the frame rate; the HUD clock shows the game time; a gun being
+  placed is dimmed where it can't go.

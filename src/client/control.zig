@@ -75,6 +75,9 @@ pub const Control = struct {
     cycle: [3]struct { last: i32 = -1, time: f64 = -100 } = @splat(.{}),
     /// Recent happenings the space bar jumps to, newest first.
     notices: std.ArrayList(Notice) = .empty,
+    /// The building whose window is open: with no units selected, orders
+    /// set its rally points.
+    rally_for: ?i32 = null,
 
     pub fn init(gpa: std.mem.Allocator) Control {
         return .{ .gpa = gpa };
@@ -113,7 +116,7 @@ pub const Control = struct {
 
     /// The next notice to look at (it goes to the back of the list);
     /// stale ones are dropped. `real_time` is the notices' clock.
-    pub fn nextNotice(c: *Control, world: *const World, real_time: f64, rng: std.Random) ?*Object {
+    pub fn nextNotice(c: *Control, world: *const World, real_time: f64, rng: std.Random) ?struct { obj: *Object, open_gui: bool } {
         while (c.notices.items.len > 0) {
             const n = c.notices.orderedRemove(0);
             const obj = world.find(n.id) orelse continue;
@@ -121,7 +124,7 @@ pub const Control = struct {
             const o = world.findOpt(obj.leader) orelse obj;
             if (n.select and !c.isSelected(o.ref_id)) c.select(world, o.ref_id, rng);
             c.notices.append(c.gpa, n) catch {};
-            return o;
+            return .{ .obj = o, .open_gui = n.open_gui };
         }
         return null;
     }
@@ -430,6 +433,12 @@ pub const Control = struct {
     /// Right click at map point (x, y): add an order for every selected
     /// unit, depending on what is there (AddDevWayPointToSelected).
     pub fn addOrder(c: *Control, world: *const World, x: i32, y: i32, opt: OrderOptions) void {
+        if (c.selected.items.len == 0) if (c.rally_for) |id| {
+            const gop = c.pending.getOrPut(c.gpa, id) catch return;
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            gop.value_ptr.append(c.gpa, .{ .mode = .move, .ref_id = -1, .x = x, .y = y, .attack_to = true, .player_given = true }) catch {};
+            return;
+        };
         const target = if (opt.from_minimap) null else if (c.hover) |h| world.find(h.id) else null;
         for (c.selected.items) |id| {
             const o = world.find(id) orelse continue;
@@ -492,7 +501,18 @@ pub const Control = struct {
     /// where to show the order marker.
     pub fn sendOrders(c: *Control, session: *Session, nearest_only: bool, rng: std.Random) !void {
         const world = &session.world;
-        if (c.selected.items.len == 0) return;
+        if (c.selected.items.len == 0) {
+            const id = c.rally_for orelse return;
+            const kv = c.pending.fetchRemove(id) orelse return;
+            var list = kv.value;
+            defer list.deinit(c.gpa);
+            try session.sendWaypoints(id, list.items, true);
+            if (list.items.len > 0) {
+                const last = list.items[list.items.len - 1];
+                c.marker = .{ .kind = .placed, .x = last.x, .y = last.y, .until = world.now() + 3 };
+            }
+            return;
+        }
         var marker_at: ?Waypoint = null;
         const first_list = c.pending.get(c.selected.items[0]);
         if (first_list) |l| if (l.items.len > 0) {
@@ -568,6 +588,23 @@ pub const Control = struct {
                 cursors.draw(cv, c.markerKind(world, wp), c.team, time, at[0], at[1]);
             }
         }
+        if (c.rally_for) |id| if (world.find(id)) |b| {
+            // From the door, out of the building, then the rally points.
+            const door = b.creationPoint() orelse return;
+            var from: [2]i32 = .{ door.x, door.y };
+            if (b.creationMovePoint()) |out| {
+                dottedLine(cv, from, .{ out.x, out.y }, phase);
+                from = .{ out.x, out.y };
+            }
+            const pending = if (c.pending.get(id)) |l| l.items else &.{};
+            var last: ?Waypoint = null;
+            for ([_][]const Waypoint{ if (pending.len > 0) &.{} else b.rallypoints.items, pending }) |list| for (list) |wp| {
+                dottedLine(cv, from, .{ wp.x, wp.y }, phase);
+                from = .{ wp.x, wp.y };
+                last = wp;
+            };
+            if (last) |wp| cursors.draw(cv, .placed, c.team, time, wp.x, wp.y);
+        };
         if (c.marker) |m| if (time < m.until) cursors.draw(cv, m.kind, c.team, time, m.x, m.y);
     }
 
