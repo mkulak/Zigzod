@@ -25,7 +25,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
 
 ## Layout
 
-    src/main.zig          the `zod` program: `zod server`, `zod client`
+    src/main.zig          the `zod` program: `zod server`, `zod client`, `zod bot`
     src/game.zig          game data and rules shared by all programs
       game/constants.zig  enums (teams, unit types, ...) - wire values
       game/settings.zig   unit stats / tunables, also the SET_SETTINGS message
@@ -46,8 +46,9 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
     src/server.zig        the game server
       server/server.zig   players, handshake, messages, votes, map rotation
       server/commands.zig chat commands (/help, /changemap, ...)
-      server/bots.zig     bots (C++ zod_engine processes for now)
-    src/client.zig        the game client (work in progress)
+      server/bots.zig     the server's own bots
+    src/bot.zig           the computer player
+    src/client.zig        the game client
       client/session.zig  connection and game state kept in sync with the
                           server; reports what happened as events
       client/gfx.zig      images, drawing with clipping, team colors
@@ -92,7 +93,9 @@ run from the repository root.
    votes are shown; the HUD faces talk; sound and music play; the in-game
    menus change teams, bots, maps, volume, speed and pause. Missing: the
    end-of-game parade, animals, the crane's construction effect.
-4. **Bot**, then **map editor**.
+4. **Bot** - done: `zod bot` joins any server, and `zod server -b team`
+   (or the Manage Bots menu) runs bots inside the server. Then the **map
+   editor**.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
 
 ## Behaviour changes
@@ -129,3 +132,6 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   the main menu instead of quitting at once (Quit Game asks first); the
   dead "Multiplayer" button is gone; menus stay inside the window; the mouse
   wheel scrolls the list under the mouse only.
+* the bot: a unit that found nothing to do no longer blocks the others from
+  being paired with their targets; bots run inside the server instead of
+  as separate processes; the two unused older AIs were not ported.

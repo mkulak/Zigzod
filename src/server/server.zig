@@ -8,7 +8,7 @@
 //!   in a list that shifted when someone disconnected;
 //! * there are no user accounts or database, so every player has one vote
 //!   (without a database the original let anyone decide every vote alone);
-//! * bots run as separate processes (see `bots.zig`).
+//! * bots are Zig bots run by the server itself (see `bots.zig`).
 
 const std = @import("std");
 const game = @import("../game.zig");
@@ -133,8 +133,6 @@ pub const Options = struct {
     server_settings: ?[]const u8 = null,
     /// Teams that get a bot from the start.
     bots: std.EnumSet(k.Team) = .initEmpty(),
-    /// Program started for bots (`<bot_program> -c localhost -b <team>`).
-    bot_program: ?[]const u8 = null,
 };
 
 pub const Server = struct {
@@ -188,7 +186,7 @@ pub const Server = struct {
             .world = World.init(gpa, terrain, @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
             .listener = listener,
             .clock_origin = std.Io.Clock.awake.now(io),
-            .bots = .{ .program = options.bot_program },
+            .bots = .{ .gpa = gpa, .port = options.port, .terrain = terrain, .seed = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds))) },
         };
         errdefer s.deinit();
 
@@ -197,7 +195,7 @@ pub const Server = struct {
         try s.loadNextMap(options.map);
 
         var it = options.bots.iterator();
-        while (it.next()) |team| s.bots.start(gpa, io, team);
+        while (it.next()) |team| s.bots.start(team);
 
         std.log.info("server listening on port {d}", .{options.port});
         return s;
@@ -205,7 +203,7 @@ pub const Server = struct {
 
     pub fn deinit(s: *Server) void {
         const gpa = s.gpa;
-        s.bots.deinit(s.io);
+        s.bots.deinit();
         for (s.players.items) |p| {
             p.deinit(gpa);
             gpa.destroy(p);
@@ -233,6 +231,7 @@ pub const Server = struct {
     pub fn run(s: *Server) !void {
         while (true) {
             try s.tick();
+            s.bots.update(s.realTime());
             s.io.sleep(.fromMilliseconds(10), .awake) catch return;
         }
     }
@@ -942,7 +941,7 @@ pub const Server = struct {
             },
             .start_bot => if (value > 0 and value < k.Team.count) {
                 const team: k.Team = @enumFromInt(value);
-                if (!s.teamHasBot(team, false)) s.bots.start(s.gpa, s.io, team);
+                if (!s.teamHasBot(team, false)) s.bots.start(team);
                 try s.setBotsIgnored(team, false);
             },
             .stop_bot => if (value > 0 and value < k.Team.count) try s.setBotsIgnored(@enumFromInt(value), true),

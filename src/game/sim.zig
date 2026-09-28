@@ -808,7 +808,7 @@ fn hasExplosives(w: *const World, o: *const Object) bool {
     return o.hasExplosives(w.findOpt(o.leader));
 }
 
-fn canAttackObject(w: *const World, o: *const Object, target: *const Object) bool {
+pub fn canAttackObject(w: *const World, o: *const Object, target: *const Object) bool {
     if (!o.canAttack() or target.isDestroyed() or o.owner == target.owner) return false;
     return hasExplosives(w, o) or !target.attacked_by_explosives;
 }
