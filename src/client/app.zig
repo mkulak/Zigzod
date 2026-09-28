@@ -16,6 +16,7 @@ const Control = @import("control.zig").Control;
 const drawSelectionBox = @import("control.zig").drawSelectionBox;
 const windows = @import("windows.zig");
 const messages = @import("messages.zig");
+const portrait = @import("portrait.zig");
 const Session = @import("session.zig").Session;
 
 const k = game.constants;
@@ -258,7 +259,10 @@ pub const App = struct {
                 else => {},
             },
             .portrait_anim => |pa| if (app.session.find(pa.ref_id)) |o| {
-                if (o.owner == app.control.team) app.control.notice(.{ .id = pa.ref_id, .select = true, .time = app.realTime() });
+                if (o.owner == app.control.team) {
+                    app.control.notice(.{ .id = pa.ref_id, .select = true, .time = app.realTime() });
+                    if (pa.anim_id >= 0 and pa.anim_id < @typeInfo(portrait.Anim).@"enum".fields.len) app.hud.speak(o, @enumFromInt(pa.anim_id), app.realTime());
+                }
             },
             .health_changed => |hc| if (app.session.find(hc.ref_id)) |o| {
                 if (o.health < hc.old) app.objects.hit(o);
@@ -268,7 +272,7 @@ pub const App = struct {
             .snipe => |id| if (app.session.find(id)) |o| app.objects.sniped(o),
             .attacked => |a| if (app.session.find(a.target)) |t| {
                 if (t.owner == app.session.team and t.owner != .none and app.hud.alert == null) {
-                    app.hud.attacked(a.target, app.session.world.now(), app.prng.random());
+                    app.hud.attacked(t, app.session.world.now(), app.realTime(), app.prng.random());
                     if (app.hud.alert != null) app.control.notice(.{ .id = a.target, .select = true, .time = app.realTime() });
                 }
             },
@@ -276,7 +280,10 @@ pub const App = struct {
             .fired_missile => |fm| if (app.session.find(fm.ref_id)) |o| app.objects.fireMissile(&app.session.world, o, fm.x, fm.y),
             .pickup_grenades => |id| if (app.session.find(id)) |o| {
                 app.objects.pickupGrenades(o);
-                if (o.owner == app.control.team) app.control.notice(.{ .id = id, .select = true, .time = app.realTime() });
+                if (o.owner == app.control.team) {
+                    app.control.notice(.{ .id = id, .select = true, .time = app.realTime() });
+                    app.hud.speak(o, .grenades_collected, app.realTime());
+                }
             },
             .crane_anim => |ca| if (app.session.find(ca.ref_id)) |o| app.objects.craneAnim(o, ca.on),
             .repair_anim => |ra| if (app.session.find(ra.ref_id)) |o| {
@@ -557,7 +564,7 @@ pub const App = struct {
                 app.control.forgetOrders();
             };
         }
-        try app.control.sendOrders(&app.session, app.keys.z, app.prng.random());
+        try app.sendOrders();
     }
 
     /// A selectable unit of ours under map point `p` (clicking there selects
@@ -599,6 +606,12 @@ pub const App = struct {
                 app.placing = .{ .building = building, .gun = gun };
             },
         }
+    }
+
+    /// Send queued orders; the HUD's unit acknowledges them.
+    fn sendOrders(app: *App) !void {
+        const sent = try app.control.sendOrders(&app.session, app.keys.z, app.prng.random()) orelse return;
+        app.hud.portrait.play(portrait.acknowledgeAnim(sent.no_way, app.prng.random()), app.realTime());
     }
 
     fn hudButton(app: *App, b: hud_mod.Button) void {
@@ -666,7 +679,7 @@ pub const App = struct {
             c.SDLK_LSHIFT, c.SDLK_RSHIFT => {
                 app.keys.shift = false;
                 // Queued orders go out.
-                try app.control.sendOrders(&app.session, app.keys.z, app.prng.random());
+                try app.sendOrders();
             },
             'z' => app.keys.z = false,
             else => {},
@@ -805,12 +818,15 @@ pub const App = struct {
             app.news.draw(screen_map, &app.fonts, if (app.factory_list.shown) 5 + 142 else 5, area.h, now);
 
             app.hud.updateButtons(world, app.session.team);
-            app.hud.update(world, time);
+            app.hud.update(world, time, now, app.prng.random());
+            // The HUD shows a new unit: it reports.
+            if (app.control.hud_unit != app.hud.portrait.ref_id) app.hud.showUnit(world.findOpt(app.control.hud_unit), now, app.prng.random());
             app.hud.draw(app.screen, .{
                 .world = world,
                 .team = app.session.team,
                 .selected = world.findOpt(app.control.hud_unit),
                 .time = time,
+                .real_time = now,
                 .view = v,
                 .chat = if (app.chat) |t_| t_.items else null,
             });

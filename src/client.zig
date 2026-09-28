@@ -12,6 +12,7 @@ pub const cursor = @import("client/cursor.zig");
 pub const control = @import("client/control.zig");
 pub const windows = @import("client/windows.zig");
 pub const messages = @import("client/messages.zig");
+pub const portrait = @import("client/portrait.zig");
 pub const session = @import("client/session.zig");
 pub const app = @import("client/app.zig");
 

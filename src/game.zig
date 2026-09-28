@@ -10,6 +10,7 @@ pub const buildlist = @import("game/buildlist.zig");
 pub const object = @import("game/object.zig");
 pub const world = @import("game/world.zig");
 pub const sim = @import("game/sim.zig");
+pub const unit_rating = @import("game/unit_rating.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

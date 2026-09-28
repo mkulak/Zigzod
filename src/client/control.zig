@@ -496,14 +496,33 @@ pub const Control = struct {
         }
     }
 
+    /// The rating of a unit (null for other objects).
+    fn rated(o: *const Object) ?game.unit_rating.Unit {
+        return switch (o.kind) {
+            .robot => |r| .{ .robot = r },
+            .vehicle => |v| .{ .vehicle = v.type },
+            .cannon => |cn| .{ .cannon = cn.type },
+            else => null,
+        };
+    }
+
     /// Send the collected orders. With `nearest_only` only the unit closest
     /// to the first order's spot goes, and leaves the selection. Returns
-    /// where to show the order marker.
-    pub fn sendOrders(c: *Control, session: *Session, nearest_only: bool, rng: std.Random) !void {
+    /// whether units were ordered, and whether a lone unit was sent to
+    /// attack something that will beat it (it complains).
+    pub fn sendOrders(c: *Control, session: *Session, nearest_only: bool, rng: std.Random) !?struct { no_way: bool } {
         const world = &session.world;
+        var no_way = false;
+        if (c.selected.items.len == 1) if (c.pending.get(c.selected.items[0])) |l| if (l.items.len > 0 and l.items[0].mode == .attack) {
+            const unit = world.find(c.selected.items[0]);
+            const target = world.find(l.items[0].ref_id);
+            if (unit != null and target != null) if (rated(unit.?)) |a| if (rated(target.?)) |v| {
+                no_way = game.unit_rating.rate(a, v) == .will_die;
+            };
+        };
         if (c.selected.items.len == 0) {
-            const id = c.rally_for orelse return;
-            const kv = c.pending.fetchRemove(id) orelse return;
+            const id = c.rally_for orelse return null;
+            const kv = c.pending.fetchRemove(id) orelse return null;
             var list = kv.value;
             defer list.deinit(c.gpa);
             try session.sendWaypoints(id, list.items, true);
@@ -511,15 +530,16 @@ pub const Control = struct {
                 const last = list.items[list.items.len - 1];
                 c.marker = .{ .kind = .placed, .x = last.x, .y = last.y, .until = world.now() + 3 };
             }
-            return;
+            return null;
         }
         var marker_at: ?Waypoint = null;
         const first_list = c.pending.get(c.selected.items[0]);
         if (first_list) |l| if (l.items.len > 0) {
             marker_at = l.items[l.items.len - 1];
         };
+        if (first_list == null or first_list.?.items.len == 0) return null;
         if (nearest_only) {
-            const wp = (first_list orelse return).items[0];
+            const wp = first_list.?.items[0];
             var best: ?*Object = null;
             var best_d: f64 = std.math.inf(f64);
             for (c.selected.items) |id| if (world.find(id)) |o| {
@@ -545,6 +565,7 @@ pub const Control = struct {
             c.marker = .{ .kind = c.markerKind(world, m), .x = markerX(world, m)[0], .y = markerX(world, m)[1], .until = world.now() + 3 };
         }
         c.show_routes_until = world.now() + 3;
+        return .{ .no_way = no_way };
     }
 
     fn markerKind(_: *const Control, world: *const World, wp: Waypoint) cursor.Kind {

@@ -39,6 +39,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
                           them together; queues messages for clients
       game/sim.zig        the simulation step (orders, movement, combat,
                           production) and validation of players' orders
+      game/unit_rating.zig  which units beat which
     src/net.zig           networking
       net/protocol.zig    message ids and packed payload structs
       net/conn.zig        non-blocking framed TCP connections
@@ -61,6 +62,8 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/control.zig  selecting units, control groups, giving orders
       client/windows.zig  production window, factory list
       client/messages.zig news and chat lines, computer messages, vote box
+      client/portrait.zig the talking faces in the HUD
+      client/portrait_frames.zig  their animation frames (data)
       client/app.zig      window, main loop, camera
 
     src/root.zig          (transitional) Zig code linked into the C++ programs:
@@ -83,7 +86,7 @@ run from the repository root.
    map, all objects with their animations and the effects, has the HUD and
    minimap, units can be selected and ordered, and production is run from
    the building windows and the factory list; news, computer messages and
-   votes are shown. Missing: portraits, menus, sound.
+   votes are shown; the HUD faces talk. Missing: menus, sound.
 4. **Bot**, then **map editor**.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
 

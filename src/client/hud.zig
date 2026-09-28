@@ -10,6 +10,7 @@ const std = @import("std");
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const font = @import("font.zig");
+const portrait_mod = @import("portrait.zig");
 
 const k = game.constants;
 const Object = game.object.Object;
@@ -152,6 +153,13 @@ const minimap_h = 388 - 299;
 
 pub const Hud = struct {
     images: Images,
+    faces: portrait_mod.Faces,
+    /// The selected unit's driver.
+    portrait: portrait_mod.Portrait = .{},
+    /// Speaks up when something happens (attacks, captures, ...); shown
+    /// instead of `portrait` while it talks.
+    alert_portrait: portrait_mod.Portrait = .{ .idle_anims = false },
+    planet: k.Planet = .desert,
     fonts: *const font.Fonts,
     palettes: *const gfx.TeamPalettes,
     buttons: [Button.count]ButtonState = initialButtons(),
@@ -165,13 +173,16 @@ pub const Hud = struct {
     alert_misses: u8 = 0,
     next_alert_check: f64 = 0,
     next_alert_flash: f64 = 0,
+    next_alert_speech: f64 = 0,
+    last_alert_speech: ?u8 = null,
 
     pub fn init(assets: []const u8, palettes: *const gfx.TeamPalettes, fonts: *const font.Fonts) Hud {
-        return .{ .images = .load(assets, palettes), .fonts = fonts, .palettes = palettes };
+        return .{ .images = .load(assets, palettes), .faces = .load(assets, palettes), .fonts = fonts, .palettes = palettes };
     }
 
     pub fn deinit(h: *Hud) void {
         h.images.deinit();
+        h.faces.deinit();
     }
 
     fn initialButtons() [Button.count]ButtonState {
@@ -183,6 +194,21 @@ pub const Hud = struct {
     pub fn reset(h: *Hud) void {
         h.buttons = initialButtons();
         h.alert = null;
+        h.portrait.show(null);
+        h.alert_portrait.show(null);
+    }
+
+    /// A new unit is shown: it reports.
+    pub fn showUnit(h: *Hud, o: ?*const Object, real_time: f64, rng: std.Random) void {
+        h.portrait.show(o);
+        if (o) |obj| h.portrait.play(portrait_mod.selectedAnim(obj, rng), real_time);
+    }
+
+    /// The alert face says something about `o` (if it isn't talking).
+    pub fn speak(h: *Hud, o: *const Object, anim: portrait_mod.Anim, real_time: f64) void {
+        if (h.alert_portrait.busy()) return;
+        h.alert_portrait.show(o);
+        h.alert_portrait.play(anim, real_time);
     }
 
     /// Fit the minimap to a new map's shape (ZMiniMap::Setup_Boundaries).
@@ -203,6 +229,7 @@ pub const Hud = struct {
         h.minimap = r;
         h.map_w = m.widthPixels();
         h.map_h = m.heightPixels();
+        h.planet = m.planet();
     }
 
     pub fn state(h: *const Hud, b: Button) ButtonState {
@@ -229,18 +256,23 @@ pub const Hud = struct {
         }
     }
 
-    /// One of our units was attacked; flash the A button (sometimes).
-    pub fn attacked(h: *Hud, target: i32, time: f64, rng: std.Random) void {
+    /// One of our units was attacked; flash the A button (sometimes) and
+    /// have it call for help.
+    pub fn attacked(h: *Hud, target: *const Object, time: f64, real_time: f64, rng: std.Random) void {
         if (h.alert != null or rng.uintLessThan(u32, 5) != 0) return;
-        h.alert = target;
+        h.alert = target.ref_id;
         h.alert_misses = 0;
         h.next_alert_check = time + 0.25;
         h.next_alert_flash = time + 0.15;
+        h.next_alert_speech = real_time + 5 + 0.01 * @as(f64, @floatFromInt(rng.uintLessThan(u32, 300)));
+        h.speak(target, .were_under_attack, real_time);
     }
 
     /// The alert goes away when the unit is gone or has not been under
-    /// attack for a few seconds (ZHud::ProcessA).
-    pub fn update(h: *Hud, world: *const World, time: f64) void {
+    /// attack for a few seconds (ZHud::ProcessA). Faces animate.
+    pub fn update(h: *Hud, world: *const World, time: f64, real_time: f64, rng: std.Random) void {
+        h.portrait.update(real_time, rng);
+        h.alert_portrait.update(real_time, rng);
         const id = h.alert orelse return;
         const a = &h.buttons[@intFromEnum(Button.a)];
         if (world.find(id) == null) return h.endAlert();
@@ -258,6 +290,18 @@ pub const Hud = struct {
         if (time >= h.next_alert_flash) {
             h.next_alert_flash = time + 0.15;
             a.* = if (a.* == .inactive) .active else .inactive;
+        }
+        // Keep calling for help, a different line each time.
+        if (real_time >= h.next_alert_speech) {
+            h.next_alert_speech = real_time + 5 + 0.01 * @as(f64, @floatFromInt(rng.uintLessThan(u32, 300)));
+            var line = rng.uintLessThan(u8, 6);
+            if (h.last_alert_speech) |last| if (line == last) {
+                line = (line + 1) % 6;
+            };
+            if (!h.alert_portrait.busy()) if (world.find(id)) |o| {
+                h.last_alert_speech = line;
+                h.speak(o, @enumFromInt(@intFromEnum(portrait_mod.Anim.i_said_were_under_attack) + line), real_time);
+            };
         }
     }
 
@@ -314,6 +358,11 @@ pub const Hud = struct {
             return .none;
         }
         if (h.minimapSpot(screen_w, screen_h, x, y)) |spot| return .{ .map = spot };
+        // The face: go to whoever is talking.
+        if (x >= off[0] + 556 and y >= off[1] + 44 and x <= off[0] + 556 + portrait_mod.width and y <= off[1] + 44 + portrait_mod.height) {
+            const p = if (h.alert_portrait.busy()) h.alert_portrait else h.portrait;
+            if (p.ref_id) |id| return .{ .jump = id };
+        }
         return .none;
     }
 
@@ -342,6 +391,7 @@ pub const Hud = struct {
         /// The unit shown in the panel.
         selected: ?*const Object,
         time: f64,
+        real_time: f64,
         /// The map area on screen, in map coordinates.
         view: Rect,
         /// Text being typed into the chat line.
@@ -389,6 +439,8 @@ pub const Hud = struct {
         }
 
         h.drawClock(cv, v.time, off);
+        const face = if (h.alert_portrait.busy()) &h.alert_portrait else &h.portrait;
+        face.draw(cv, &h.faces, h.planet, off[0] + 556, off[1] + 44, v.real_time);
         h.drawSelected(cv, v, off);
         h.drawMinimap(cv, v, off);
         h.drawChat(cv, chat_area, v.chat);
