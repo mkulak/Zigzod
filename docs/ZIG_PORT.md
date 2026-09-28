@@ -121,5 +121,4 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   gives them (the C++ client drew all of them white); computer messages
   blink on one clock (the C++ mixed real and game time);
 * the "you're losing" warnings play (the C++ looked for comp_youre_losing_0.wav
-  instead of comp_youre_losing_00.wav), and factories hum whether they make
-  robots or vehicles.
+  instead of comp_youre_losing_00.wav).
