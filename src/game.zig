@@ -2,6 +2,7 @@
 //! and map editor.
 
 pub const constants = @import("game/constants.zig");
+pub const clock = @import("game/clock.zig");
 pub const settings = @import("game/settings.zig");
 pub const map = @import("game/map.zig");
 pub const pathfinding = @import("game/pathfinding.zig");

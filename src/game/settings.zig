@@ -311,8 +311,8 @@ pub const Settings = extern struct {
     }
 
     /// Load settings from a file on top of the defaults.
-    pub fn load(io: std.Io, path: []const u8, gpa: std.mem.Allocator) !Settings {
-        const text = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1 << 20));
+    pub fn load(io: std.Io, dir: std.Io.Dir, path: []const u8, gpa: std.mem.Allocator) !Settings {
+        const text = try dir.readFileAlloc(io, path, gpa, .limited(1 << 20));
         defer gpa.free(text);
         var s = defaults;
         _ = s.parse(text);
@@ -390,7 +390,7 @@ test "write/parse round trip" {
 
 test "the shipped settings file matches the defaults" {
     // Tests run from the repository root (see build.zig).
-    const s = try Settings.load(std.testing.io, "bin/default_settings.txt", std.testing.allocator);
+    const s = try Settings.load(std.testing.io, std.Io.Dir.cwd(), "bin/default_settings.txt", std.testing.allocator);
     var expected = Settings.defaults;
     expected.censor();
     for (s.robot, expected.robot) |a, b| {

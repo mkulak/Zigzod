@@ -189,6 +189,25 @@ pub fn build(b: *std.Build) void {
         compiled[i] = exe;
     }
 
+    // `zod`: the Zig engine (so far the game server), pure Zig.
+    const zod_options = b.addOptions();
+    zod_options.addOption([]const u8, "data_dir", b.pathFromRoot("bin"));
+    const zod_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    zod_mod.addOptions("build_options", zod_options);
+    const zod = b.addExecutable(.{ .name = "zod", .root_module = zod_mod });
+    b.installArtifact(zod);
+
+    const run_server = b.addRunArtifact(zod);
+    run_server.step.dependOn(b.getInstallStep());
+    run_server.addArg("server");
+    if (b.args) |args| run_server.addArgs(args);
+    b.step("run-server", "Run the Zig game server (pass options after --)").dependOn(&run_server.step);
+
     // `zig build test`: unit tests of the Zig modules.
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),

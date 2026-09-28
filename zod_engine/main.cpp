@@ -37,6 +37,7 @@ TCHAR *optarg;
 void display_help(char *shell_command);
 void display_version();
 int run_server_thread(void *nothing);
+
 int run_bot_thread(void *nothing);
 void run_player_thread();
 void run_tray_app();
@@ -57,6 +58,31 @@ static int bot_bypass_size;
 // ***** command line for canpaing start
 //      -l map_list.txt -n zlover -t red -r 800x484 -o -b blue
 // =============================================================
+bool any_bot_requested()
+{
+    for(int i=0;i<MAX_TEAM_TYPES;i++)
+        if(starting_conditions.read_start_bot[i])
+            return true;
+
+    return false;
+}
+
+void run_remote_bots()
+{
+    vector<SDL_Thread*> bot_threads;
+    static int teams[MAX_TEAM_TYPES];
+
+    for(int i=0;i<MAX_TEAM_TYPES;i++)
+        if(starting_conditions.read_start_bot[i])
+        {
+            teams[i] = i;
+            bot_threads.push_back(SDL_CreateThread(run_bot_thread, &teams[i]));
+        }
+
+    for(vector<SDL_Thread*>::iterator t=bot_threads.begin(); t!=bot_threads.end(); t++)
+        SDL_WaitThread(*t, nullptr);
+}
+
 int main(int argc, char **argv)
 {
     SDL_Thread *server_thread;
@@ -98,6 +124,11 @@ int main(int argc, char **argv)
         //run only a server
         //server_thread = SDL_CreateThread(run_server_thread, nullptr);
         run_server_thread(nullptr);
+    }
+    else if(starting_conditions.read_connect_address && any_bot_requested())
+    {
+        //only run the bot(s), against a remote server
+        run_remote_bots();
     }
     else if(starting_conditions.read_connect_address)
     {
@@ -219,7 +250,7 @@ void display_help(char *shell_command)
     printf("-g login_name        - your login name\n");
     printf("-i login_password    - your login password\n");
     printf("-t team              - your team\n");
-    printf("-b team              - connect a bot player\n");
+    printf("-b team              - connect a bot player (with -c: run just the bot)\n");
     printf("-w                   - run game in windowed mode\n");
     printf("-r resolution        - resolution to run the game at\n");
     printf("-d                   - run a dedicated server\n");

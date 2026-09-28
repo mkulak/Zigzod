@@ -14,7 +14,7 @@ const pathfinding = @import("pathfinding.zig");
 const buildlist = @import("buildlist.zig");
 const obj = @import("object.zig");
 const protocol = @import("../net/protocol.zig");
-const ZTime = @import("../ztime.zig").ZTime;
+const Clock = @import("clock.zig").Clock;
 
 pub const Error = std.mem.Allocator.Error;
 pub const Object = obj.Object;
@@ -67,7 +67,7 @@ pub const World = struct {
     new_objects: std.ArrayList(*Object) = .empty,
     next_ref_id: i32 = 0,
 
-    clock: ZTime = .{},
+    clock: Clock = .{},
     missiles: std.ArrayList(DamageMissile) = .empty,
     new_missiles: std.ArrayList(DamageMissile) = .empty,
     outbox: std.ArrayList(Outgoing) = .empty,
