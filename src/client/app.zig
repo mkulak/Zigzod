@@ -15,6 +15,7 @@ const cursor = @import("cursor.zig");
 const Control = @import("control.zig").Control;
 const drawSelectionBox = @import("control.zig").drawSelectionBox;
 const windows = @import("windows.zig");
+const messages = @import("messages.zig");
 const Session = @import("session.zig").Session;
 
 const k = game.constants;
@@ -55,6 +56,9 @@ pub const App = struct {
     control: Control,
     window_images: windows.Images,
     list_images: windows.ListImages,
+    msg_images: messages.Images,
+    news: messages.News,
+    notices: messages.Notices = .{},
     factory_list: windows.FactoryList = .{},
     left_on_list: bool = false,
     /// The production window of one of our buildings.
@@ -146,6 +150,8 @@ pub const App = struct {
             .control = .init(gpa),
             .window_images = undefined,
             .list_images = undefined,
+            .msg_images = undefined,
+            .news = .{ .gpa = gpa },
             .session = Session.init(gpa, conn, terrain_info, .{ .name = options.name, .team = options.team }),
             .prng = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
             .clock_origin = std.Io.Clock.awake.now(io),
@@ -156,6 +162,7 @@ pub const App = struct {
         app.cursors = .load(assets, &app.palettes);
         app.window_images = .load(assets);
         app.list_images = .load(assets);
+        app.msg_images = .load(assets);
         _ = c.SDL_ShowCursor(c.SDL_DISABLE);
         app.sprites = try Sprites.load(gpa, assets, &app.palettes);
         app.fx = Effects.init(gpa, app.sprites, &app.palettes, app.prng.random());
@@ -174,6 +181,8 @@ pub const App = struct {
         app.closeWindow();
         app.window_images.deinit();
         app.list_images.deinit();
+        app.msg_images.deinit();
+        app.news.deinit();
         app.control.deinit();
         if (app.chat) |*t| t.deinit(gpa);
         app.sprites.deinit();
@@ -237,8 +246,14 @@ pub const App = struct {
                 if (o.owner != app.control.team) app.control.forget(id);
             },
             .comp_msg => |m| switch (@as(net.protocol.CompSound, @enumFromInt(m.sound))) {
-                .vehicle, .robot => app.control.notice(.{ .id = m.ref_id, .select = true, .time = app.realTime() }),
-                .gun => app.control.notice(.{ .id = m.ref_id, .open_gui = true, .time = app.realTime() }),
+                .vehicle, .robot => |snd| {
+                    app.control.notice(.{ .id = m.ref_id, .select = true, .time = app.realTime() });
+                    app.notices.show(if (snd == .robot) .robot_manufactured else .vehicle_manufactured, m.ref_id, app.realTime());
+                },
+                .gun => {
+                    app.control.notice(.{ .id = m.ref_id, .open_gui = true, .time = app.realTime() });
+                    app.notices.show(.gun_manufactured, m.ref_id, app.realTime());
+                },
                 .vehicle_repaired => app.control.notice(.{ .id = m.ref_id, .time = app.realTime() }),
                 else => {},
             },
@@ -284,7 +299,10 @@ pub const App = struct {
                 app.placing = null;
                 app.control.reset(app.session.team);
             },
-            .news => |n| std.log.info("news: {s}", .{n.text}),
+            .news => |n| {
+                std.log.info("news: {s}", .{n.text});
+                app.news.add(n.text, .{ .r = n.color[0], .g = n.color[1], .b = n.color[2] }, app.realTime());
+            },
             else => {},
         };
     }
@@ -438,6 +456,17 @@ pub const App = struct {
                     return;
                 }
                 const p = app.mouseMap();
+                if (app.notices.click(world, app.control.team, world.clock.paused, &app.msg_images, app.mapArea(), app.mouse_x, app.mouse_y, app.realTime())) |cl| {
+                    switch (cl) {
+                        .resume_game => try app.session.sendPacket(.set_game_paused, net.protocol.GamePaused{ .game_paused = false }),
+                        .select, .open, .look => |id| if (world.find(id)) |o| {
+                            app.lookAt(o.center_x, o.center_y);
+                            if (cl == .select) app.control.select(world, id, rng);
+                            if (cl == .open) _ = app.openWindow(o);
+                        },
+                    }
+                    return;
+                }
                 if (app.window) |*w| {
                     if (w.contains(p[0], p[1])) {
                         w.press(world, &app.window_images, p[0], p[1]);
@@ -659,6 +688,7 @@ pub const App = struct {
             'v', 'V' => if (!app.keys.alt) app.selectNext(.vehicle),
             'g', 'G' => app.selectNext(.cannon),
             'b', 'B' => app.factory_list.shown = !app.factory_list.shown,
+            'h', 'H' => app.news.history = !app.news.history,
             22 => app.control.selectAll(world, .vehicle, rng), // ctrl+v
             18 => app.control.selectAll(world, .robot, rng), // ctrl+r
             3 => app.control.selectAll(world, .cannon, rng), // ctrl+c
@@ -687,6 +717,37 @@ pub const App = struct {
     // -----------------------------------------------------------------------
     // Drawing
     // -----------------------------------------------------------------------
+
+    /// The vote in progress, as shown in its box (the server gives every
+    /// player one vote).
+    fn voteBox(app: *App) ?messages.Notices.Vote {
+        const v = app.session.vote;
+        if (!v.in_progress) return null;
+        const names = [_][]const u8{ "Pause Game", "Resume Game", "Change Map", "Start Bot", "Stop Bot", "Reset Game", "Reshuffle Teams", "Set Game Speed" };
+        if (v.kind < 0 or v.kind >= names.len) return null;
+        const S = struct {
+            var buf: [160]u8 = undefined;
+        };
+        const kind: usize = @intCast(v.kind);
+        const extra: []const u8 = switch (kind) {
+            2 => if (v.value >= 0 and v.value < app.session.selectable_maps.items.len) app.session.selectable_maps.items[@intCast(v.value)] else "",
+            3, 4 => if (v.value >= 0 and v.value < k.Team.count) @as(k.Team, @enumFromInt(v.value)).name() else "",
+            else => "",
+        };
+        const desc = if (extra.len == 0) names[kind] else if (kind == 2)
+            std.fmt.bufPrint(&S.buf, "{s}: {d}. {s}", .{ names[kind], v.value, extra }) catch names[kind]
+        else
+            std.fmt.bufPrint(&S.buf, "{s}: {s}", .{ names[kind], extra }) catch names[kind];
+        var not_passing: usize = 0;
+        var yes: usize = 0;
+        var no: usize = 0;
+        for (app.session.players.items) |p| {
+            if (p.vote != .pass) not_passing += 1;
+            if (p.vote == .yes) yes += 1;
+            if (p.vote == .no) no += 1;
+        }
+        return .{ .description = desc, .needed = (not_passing + 1) / 2, .yes = yes, .no = no };
+    }
 
     /// The gun being placed, on the tile under the mouse (dimmed where it
     /// can't go).
@@ -740,6 +801,8 @@ pub const App = struct {
 
             const screen_map: gfx.Canvas = .{ .target = app.screen, .clip = area };
             app.factory_list.draw(screen_map, world, app.control.team, &app.list_images, &app.fonts, area);
+            app.notices.draw(screen_map, world, app.control.team, world.clock.paused, app.voteBox(), &app.msg_images, &app.fonts, area, now);
+            app.news.draw(screen_map, &app.fonts, if (app.factory_list.shown) 5 + 142 else 5, area.h, now);
 
             app.hud.updateButtons(world, app.session.team);
             app.hud.update(world, time);

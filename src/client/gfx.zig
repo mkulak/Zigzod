@@ -235,6 +235,36 @@ pub const Canvas = struct {
         }
     }
 
+    /// Draw with each pixel's color scaled by `tint` (white art takes the
+    /// tint's color) and extra transparency.
+    pub fn drawTinted(cv: Canvas, img: Image, x: i32, y: i32, tint: Color, alpha: u8) void {
+        const to = Rect{ .x = x + cv.dx, .y = y + cv.dy, .w = img.width(), .h = img.height() };
+        const visible = to.intersect(cv.clip) orelse return;
+        const fmt = cv.target.surface.format.*;
+        var j: i32 = 0;
+        while (j < visible.h) : (j += 1) {
+            const src = img.row(visible.y - to.y + j);
+            const dst = cv.target.row(visible.y + j);
+            var i: i32 = 0;
+            while (i < visible.w) : (i += 1) {
+                const s = src[@intCast(visible.x - to.x + i)];
+                const a = ((s >> 24) * alpha) / 255;
+                if (a == 0) continue;
+                const d = &dst[@intCast(visible.x + i)];
+                const sr = (((s >> 16) & 0xFF) * tint.r) / 255;
+                const sg = (((s >> 8) & 0xFF) * tint.g) / 255;
+                const sb = ((s & 0xFF) * tint.b) / 255;
+                var r: u32 = (d.* & fmt.Rmask) >> @intCast(fmt.Rshift);
+                var g: u32 = (d.* & fmt.Gmask) >> @intCast(fmt.Gshift);
+                var b: u32 = (d.* & fmt.Bmask) >> @intCast(fmt.Bshift);
+                r = (sr * a + r * (255 - a)) / 255;
+                g = (sg * a + g * (255 - a)) / 255;
+                b = (sb * a + b * (255 - a)) / 255;
+                d.* = (d.* & ~(fmt.Rmask | fmt.Gmask | fmt.Bmask)) | r << @intCast(fmt.Rshift) | g << @intCast(fmt.Gshift) | b << @intCast(fmt.Bshift);
+            }
+        }
+    }
+
     /// The image as a white silhouette (units flash when hit).
     pub fn drawHit(cv: Canvas, img: Image, x: i32, y: i32) void {
         const to = Rect{ .x = x + cv.dx, .y = y + cv.dy, .w = img.width(), .h = img.height() };

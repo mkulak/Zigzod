@@ -63,6 +63,15 @@ pub const Font = struct {
         };
     }
 
+    /// Draw in a color (the fonts are white) and with transparency.
+    pub fn drawTinted(f: *const Font, cv: gfx.Canvas, text: []const u8, x: i32, y: i32, color: gfx.Color, alpha: u8) void {
+        var cx = x;
+        for (text) |ch| if (f.glyph(ch)) |g| {
+            cv.drawTinted(g, cx, y, color, alpha);
+            cx += g.width();
+        };
+    }
+
     /// The text as an image (null if no character has a glyph).
     pub fn render(f: *const Font, text: []const u8) ?gfx.Image {
         const w = f.width(text);
