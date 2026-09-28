@@ -245,6 +245,56 @@ pub const RobotSprites = struct {
     tank_lid: [dirs][3]?Image,
 };
 
+/// Images of the effects (explosions, shots, debris, ...).
+pub const EffectSprites = struct {
+    laser_bullet: [2]?Image,
+    flame_bullet: [4]?Image,
+    /// Fire where a pyro's flame lands: 5 kinds with 4, 4, 4, 6, 6 frames.
+    pyro_fire: [5][6]?Image,
+    light_init_fire: [4]?Image,
+    light_bullet: ?Image,
+    big_smoke: [4]?Image,
+    little_fire: [4]?Image,
+    small_fire_smoke: [4]?Image,
+    fire: [4]?Image,
+    side_explosion: [7]?Image,
+    unit_particle: [20]?Image,
+    spark: [6]?Image,
+    tough_bullet: [2]?Image,
+    mushroom: [12]?Image,
+    tough_smoke: [8]?Image,
+    mo_bullet: ?Image,
+    mc_bullet: ?Image,
+    grenade: [4]?Image,
+    light_turret: [8]?Image,
+    medium_turret: [8]?Image,
+    heavy_turret: [teams][8]?Image,
+    building_piece: [2][12]?Image,
+    fort_piece: [5][12]?Image,
+    /// Wrecks: gatling, gun, howitzer, missile cannon.
+    cannon_wasted: [4]?Image,
+    jeep_wasted: ?Image,
+    missile_launcher_wasted: ?Image,
+    apc_wasted: ?Image,
+    crane_wasted: ?Image,
+    robot_die: [4][teams][10]?Image,
+    robot_melt: [teams][17]?Image,
+    robot_flip: [teams][33]?Image,
+    rock_mid: [2][planets][8]?Image,
+    rock_small: [planets][16]?Image,
+    rock_large: [2][planets][12]?Image,
+    map_object: [map_objects]?Image,
+    bridge_debris: [planets][12]?Image,
+    /// [tank, jeep][planet][direction][fade]
+    track: [2][planets][dirs][3]?Image,
+    /// [planet][kind][frame]
+    tank_dirt: [planets][2][6]?Image,
+    track_dust: [dirs][7]?Image,
+    track_spark: [dirs][4]?Image,
+    tank_oil: [3][3]?Image,
+    ground_spark: [6]?Image,
+};
+
 pub const Sprites = struct {
     gpa: std.mem.Allocator,
     pool: std.ArrayList(Image) = .empty,
@@ -276,6 +326,7 @@ pub const Sprites = struct {
     jeep: Jeep,
     crane: Crane,
     robot: RobotSprites,
+    fx: EffectSprites,
 
     pub fn load(gpa: std.mem.Allocator, assets: []const u8, palettes: *const gfx.TeamPalettes) !*Sprites {
         const s = try gpa.create(Sprites);
@@ -302,6 +353,7 @@ pub const Sprites = struct {
             .jeep = undefined,
             .crane = undefined,
             .robot = undefined,
+            .fx = undefined,
         };
         var l: Loader = .{ .gpa = gpa, .assets = assets, .palettes = palettes, .pool = &s.pool };
         s.loadItems(&l);
@@ -309,6 +361,7 @@ pub const Sprites = struct {
         s.loadCannons(&l);
         s.loadVehicles(&l);
         s.loadRobots(&l);
+        s.loadEffects(&l);
         return s;
     }
 
@@ -486,6 +539,10 @@ pub const Sprites = struct {
         }
     }
 
+    fn loadEffects(s: *Sprites, l: *Loader) void {
+        loadEffectsImpl(s, l);
+    }
+
     fn loadRobots(s: *Sprites, l: *Loader) void {
         const r = &s.robot;
         const dir = "units/robots/";
@@ -519,6 +576,98 @@ pub const Sprites = struct {
         for (0..dirs) |d| r.tank_lid[d] = l.seq(3, "units/vehicles/tank_lid_r{d:0>3}_n{d:0>2}.png", .{angle(d)});
     }
 };
+
+fn planetName(p: usize) []const u8 {
+    return @tagName(@as(Planet, @enumFromInt(p)));
+}
+
+fn loadEffectsImpl(s: *Sprites, l: *Loader) void {
+    const f = &s.fx;
+    f.laser_bullet = l.seq(2, "units/robots/laser/bullet_n{d:0>2}.png", .{});
+    f.flame_bullet = l.seq(4, "units/robots/pyro/bullet_n{d:0>2}.png", .{});
+    f.pyro_fire = @splat(@splat(null));
+    for (0..5) |i| for (0..([5]usize{ 4, 4, 4, 6, 6 })[i]) |j| {
+        f.pyro_fire[i][j] = l.one("other/fire/fire{d}_n{d:0>2}.png", .{ i, j });
+    };
+    f.light_init_fire = l.seq(4, "units/vehicles/light/initfire_n{d:0>2}.png", .{});
+    f.light_bullet = l.one("units/vehicles/light/bullet.png", .{});
+    const de = "units/vehicles/death_effects/";
+    f.big_smoke = l.seq(4, de ++ "big_smoke_n{d:0>2}.png", .{});
+    f.little_fire = l.seq(4, de ++ "little_fire_n{d:0>2}.png", .{});
+    f.small_fire_smoke = l.seq(4, de ++ "small_fire_smoke_n{d:0>2}.png", .{});
+    f.fire = l.seq(4, de ++ "fire_n{d:0>2}.png", .{});
+    f.spark = l.seq(6, de ++ "spark_n{d:0>2}.png", .{});
+    f.side_explosion = l.seq(7, "other/explosions/side_explosion_n{d:0>2}.png", .{});
+    f.unit_particle = l.seq(20, "other/particles/unit_particle_n{d:0>2}.png", .{});
+    f.tough_bullet = l.seq(2, "units/robots/tough/bullet_n{d:0>2}.png", .{});
+    f.mushroom = l.seq(12, "units/robots/tough/mushroom_n{d:0>2}.png", .{});
+    f.tough_smoke = l.seq(8, "units/robots/tough/smoke_n{d:0>2}.png", .{});
+    f.mo_bullet = l.one("units/vehicles/missile_launcher/bullet.png", .{});
+    f.mc_bullet = l.one("units/cannons/missile_cannon/bullet.png", .{});
+    f.grenade = l.seq(4, "other/grenades/grenade_n{d:0>2}.png", .{});
+    f.light_turret = l.seq(8, "units/vehicles/light/top_pop_n{d:0>2}.png", .{});
+    f.medium_turret = l.seq(8, "units/vehicles/medium/top_pop_n{d:0>2}.png", .{});
+    f.heavy_turret = l.teamFrames(8, "units/vehicles/heavy/top_pop_{s}_n{d:0>2}.png", .{}, false);
+    for (0..2) |i| f.building_piece[i] = l.seq(12, "buildings/death_effects/piece{d}_n{d:0>2}.png", .{i});
+    for (0..5) |i| f.fort_piece[i] = l.seq(12, "buildings/death_effects/fort_piece{d}_n{d:0>2}.png", .{i});
+    f.cannon_wasted = .{
+        s.cannon[@intFromEnum(k.Cannon.gatling)].wasted[0],
+        s.cannon[@intFromEnum(k.Cannon.gun)].wasted[0],
+        s.cannon[@intFromEnum(k.Cannon.howitzer)].wasted[0],
+        l.one("units/cannons/missile_cannon/wasted.png", .{}),
+    };
+    f.jeep_wasted = s.vehicle[@intFromEnum(k.Vehicle.jeep)].wasted[0];
+    f.missile_launcher_wasted = l.one("units/vehicles/missile_launcher/wasted.png", .{});
+    f.apc_wasted = l.one("units/vehicles/apc/wasted.png", .{});
+    f.crane_wasted = l.one("units/vehicles/crane/wasted_null.png", .{});
+    f.robot_die = @splat(@splat(@splat(null)));
+    inline for (0..4, .{ 10, 10, 10, 8 }) |d, n| {
+        const frames = l.teamFrames(n, std.fmt.comptimePrint("units/robots/die{d}", .{d + 1}) ++ "_{s}_n{d:0>2}.png", .{}, false);
+        for (0..teams) |t| for (0..n) |i| {
+            f.robot_die[d][t][i] = frames[t][i];
+        };
+    }
+    f.robot_melt = l.teamFrames(17, "units/robots/melt_{s}_n{d:0>2}.png", .{}, false);
+    f.robot_flip = l.teamFrames(33, "units/robots/die5_{s}_n{d:0>2}.png", .{}, false);
+    for (0..planets) |p| {
+        const pn = planetName(p);
+        const re = "planets/rock_effects/";
+        f.rock_mid[0][p] = l.seq(8, re ++ "debri_mid0_{s}_n{d:0>2}.png", .{pn});
+        f.rock_mid[1][p] = l.seq(8, re ++ "debri_mid1_{s}_n{d:0>2}.png", .{pn});
+        f.rock_small[p] = l.seq(16, re ++ "debri_small_{s}_n{d:0>2}.png", .{pn});
+        f.rock_large[0][p] = l.seq(12, re ++ "debri_large0_{s}_n{d:0>2}.png", .{pn});
+        const p_enum: Planet = @enumFromInt(p);
+        f.rock_large[1][p] = if (p_enum == .desert or p_enum == .city) @splat(null) else l.seq(12, re ++ "debri_large1_{s}_n{d:0>2}.png", .{pn});
+        f.bridge_debris[p] = l.seq(12, "planets/bridge_effects/debri_large_{s}_n{d:0>2}.png", .{pn});
+        // Tracks: none in the city, jeeps only in the desert.
+        f.track[0][p] = @splat(@splat(null));
+        f.track[1][p] = @splat(@splat(null));
+        for (0..2) |t| {
+            if (p_enum == .city or (t == 1 and p_enum != .desert)) continue;
+            for (0..4) |d| {
+                const kind = if (t == 0) "tank" else "jeep";
+                f.track[t][p][d] = l.seq(3, "units/vehicles/track_effects/{s}_track_{s}_r{d:0>3}_n{d:0>2}.png", .{ kind, pn, angle(d) });
+                f.track[t][p][d + 4] = f.track[t][p][d];
+            }
+        }
+        const dirts: usize, const frames: usize = switch (p_enum) {
+            .jungle => .{ 1, 6 },
+            .city => .{ 0, 0 },
+            else => .{ 2, 5 },
+        };
+        f.tank_dirt[p] = @splat(@splat(null));
+        for (0..dirts) |d| for (0..frames) |i| {
+            f.tank_dirt[p][d][i] = l.one("units/vehicles/tank_dirt/tank_dirt_{d}_{s}_n{d:0>2}.png", .{ d, pn, i });
+        };
+    }
+    f.map_object = l.seq(map_objects, "other/map_items/no_shadow{d}.png", .{});
+    for (0..dirs) |d| {
+        f.track_dust[d] = l.seq(7, "units/vehicles/track_dust_r{d:0>3}_n{d:0>2}.png", .{angle(d)});
+        f.track_spark[d] = l.seq(4, "units/vehicles/track_spark_r{d:0>3}_n{d:0>2}.png", .{angle(d)});
+    }
+    for (0..3) |i| f.tank_oil[i] = l.seq(3, "units/vehicles/tank_oil_{d}_n{d:0>2}.png", .{i});
+    f.ground_spark = l.seq(6, "units/vehicles/ground_spark_n{d:0>2}.png", .{});
+}
 
 test "load all sprites" {
     const palettes = gfx.TeamPalettes.load("bin/assets");

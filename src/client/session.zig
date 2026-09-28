@@ -42,7 +42,9 @@ pub const Event = union(enum) {
     deleted_object: i32,
     health_changed: struct { ref_id: i32, old: i32 },
     fired_missile: struct { ref_id: i32, x: i32, y: i32 },
-    destroyed: struct { ref_id: i32, killer: i32, fire_death: bool, missile_death: bool, destroy: bool, missiles: []protocol.FireMissileInfo },
+    /// `object` stays valid until the events are cleared, even when it was
+    /// deleted right after.
+    destroyed: struct { ref_id: i32, object: *Object, killer: i32, fire_death: bool, missile_death: bool, destroy: bool, missiles: []protocol.FireMissileInfo },
     team_changed: i32,
     news: struct { text: []u8, color: [3]u8 },
     comp_msg: protocol.ComputerMsg,
@@ -100,6 +102,9 @@ pub const Session = struct {
 
     motion: std.AutoHashMapUnmanaged(i32, Motion) = .empty,
     events: std.ArrayList(Event) = .empty,
+    /// Objects deleted since the events were last cleared (events may
+    /// still refer to them).
+    removed: std.ArrayList(*Object) = .empty,
 
     pub fn init(gpa: std.mem.Allocator, conn: Conn, terrain: *const game.map.Terrain, options: Options) Session {
         return .{
@@ -123,11 +128,17 @@ pub const Session = struct {
         s.motion.deinit(gpa);
         s.clearEvents();
         s.events.deinit(gpa);
+        s.removed.deinit(gpa);
     }
 
     pub fn clearEvents(s: *Session) void {
         for (s.events.items) |e| e.deinit(s.gpa);
         s.events.clearRetainingCapacity();
+        for (s.removed.items) |o| {
+            o.deinit(s.gpa);
+            s.gpa.destroy(o);
+        }
+        s.removed.clearRetainingCapacity();
     }
 
     fn emit(s: *Session, e: Event) Error!void {
@@ -489,8 +500,10 @@ pub const Session = struct {
         }
         _ = s.motion.remove(o.ref_id);
         _ = w.objects.orderedRemove(i);
-        o.deinit(s.gpa);
-        s.gpa.destroy(o);
+        s.removed.append(s.gpa, o) catch {
+            o.deinit(s.gpa);
+            s.gpa.destroy(o);
+        };
     }
 
     fn destroyObject(s: *Session, data: []const u8) Error!void {
@@ -505,6 +518,7 @@ pub const Session = struct {
         for (missiles, std.mem.bytesAsSlice(protocol.FireMissileInfo, data[size..])) |*dst, src| dst.* = src;
         try s.emit(.{ .destroyed = .{
             .ref_id = v.ref_id,
+            .object = o,
             .killer = v.killer_ref_id,
             .fire_death = v.do_fire_death,
             .missile_death = v.do_missile_death,

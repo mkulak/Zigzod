@@ -11,11 +11,39 @@ const Image = gfx.Image;
 const tile = k.tile_size;
 const sheet_columns = 20;
 
+const max_crater_types = 7;
+const max_crater_images = 7;
+
+/// Crater images for one kind of ground (tiles name their crater type).
+const Craters = struct {
+    small: [max_crater_images]Image = undefined,
+    small_n: u8 = 0,
+    large: [max_crater_images]Image = undefined,
+    large_n: u8 = 0,
+
+    fn load(c: *Craters, assets: []const u8, planet: []const u8, t: usize) void {
+        inline for (.{ "small", "large" }) |size| {
+            const imgs = &@field(c, size);
+            const n = &@field(c, size ++ "_n");
+            while (n.* < max_crater_images) : (n.* += 1) {
+                var buf: [256]u8 = undefined;
+                const path = std.fmt.bufPrintZ(&buf, "{s}/planets/craters/crater_" ++ size ++ "_{s}_t{d:0>2}_n{d:0>2}.png", .{ assets, planet, t, n.* }) catch break;
+                imgs[n.*] = Image.loadQuiet(path) orelse break;
+            }
+        }
+    }
+
+    fn images(c: *const Craters, big: bool) []const Image {
+        return if (big) c.large[0..c.large_n] else c.small[0..c.small_n];
+    }
+};
+
 /// Images shared by all maps.
 pub const Sheets = struct {
     planets: [k.Planet.count]?Image = @splat(null),
     zone_marker: gfx.TeamImages = @splat(null),
     zone_marker_water: gfx.TeamImages = @splat(null),
+    craters: [k.Planet.count][max_crater_types]Craters = @splat(@splat(.{})),
 
     pub fn load(assets: []const u8, palettes: *const gfx.TeamPalettes) Sheets {
         var s: Sheets = .{};
@@ -26,6 +54,14 @@ pub const Sheets = struct {
         }
         s.zone_marker = gfx.loadTeamImages(palettes, "{s}/planets/zone_marker_{s}.png", .{assets});
         s.zone_marker_water = gfx.loadTeamImages(palettes, "{s}/planets/zone_marker_water_{s}.png", .{assets});
+        for (&s.craters, 0..) |*planet, p| {
+            const types: usize = switch (@as(k.Planet, @enumFromInt(p))) {
+                .desert => 7,
+                .volcanic, .jungle, .city => 3,
+                .arctic => 2,
+            };
+            for (planet[0..types], 0..) |*cr, t| cr.load(assets, @tagName(@as(k.Planet, @enumFromInt(p))), t);
+        }
         return s;
     }
 
@@ -33,6 +69,10 @@ pub const Sheets = struct {
         for (s.planets) |p| if (p) |img| img.deinit();
         gfx.freeTeamImages(&s.zone_marker);
         gfx.freeTeamImages(&s.zone_marker_water);
+        for (&s.craters) |*planet| for (planet) |*cr| {
+            for (cr.small[0..cr.small_n]) |img| img.deinit();
+            for (cr.large[0..cr.large_n]) |img| img.deinit();
+        };
     }
 };
 
@@ -62,6 +102,8 @@ pub const Terrain = struct {
     ground: Image,
     /// Current tile of each map tile (animations change them).
     tiles: []u16,
+    /// Tiles covered by a building (or a big crater): no craters there.
+    stamped: []bool,
     /// Tiles in the middle of an animation, drawn over `ground`.
     animating: std.ArrayList(Animated) = .empty,
     /// Still water, which now and then starts to ripple.
@@ -89,8 +131,11 @@ pub const Terrain = struct {
             .height = m.header.height,
             .ground = ground,
             .tiles = try gpa.dupe(u16, m.tiles),
+            .stamped = &.{},
         };
         errdefer t.deinit();
+        t.stamped = try gpa.alloc(bool, m.tiles.len);
+        @memset(t.stamped, false);
 
         for (palette, 0..) |info, i| {
             if (!info.is_usable) continue;
@@ -120,6 +165,7 @@ pub const Terrain = struct {
         const gpa = t.gpa;
         t.ground.deinit();
         gpa.free(t.tiles);
+        gpa.free(t.stamped);
         t.animating.deinit(gpa);
         t.water.deinit(gpa);
         t.water_tiles.deinit(gpa);
@@ -230,9 +276,98 @@ pub const Terrain = struct {
         }
     }
 
-    /// Paint an image permanently onto the ground (craters, wreckage).
+    /// Paint an image permanently onto the ground (buildings); craters stay
+    /// off the tiles it covers.
     pub fn stamp(t: *Terrain, img: Image, x: i32, y: i32) void {
+        t.markStamped(x, y, img.width(), img.height());
         t.ground.draw(img, null, x, y);
+    }
+
+    fn markStamped(t: *Terrain, x: i32, y: i32, w: i32, h: i32) void {
+        const sx: u32 = @intCast(std.math.clamp(@divFloor(x, tile), 0, @as(i32, @intCast(t.width))));
+        const sy: u32 = @intCast(std.math.clamp(@divFloor(y, tile), 0, @as(i32, @intCast(t.height))));
+        const ex: u32 = @intCast(std.math.clamp(@divFloor(x + w - 1, tile) + 1, 0, @as(i32, @intCast(t.width))));
+        const ey: u32 = @intCast(std.math.clamp(@divFloor(y + h - 1, tile) + 1, 0, @as(i32, @intCast(t.height))));
+        for (sy..ey) |ty| @memset(t.stamped[ty * t.width + sx .. ty * t.width + ex], true);
+    }
+
+    fn craterType(t: *const Terrain, tx: i32, ty: i32) ?usize {
+        if (tx < 0 or ty < 0 or tx >= t.width or ty >= t.height) return null;
+        const ct = t.palette[t.tiles[@as(usize, @intCast(ty)) * t.width + @as(usize, @intCast(tx))]].crater_type;
+        return if (ct >= 0 and ct < max_crater_types) @intCast(ct) else null;
+    }
+
+    fn craterImages(t: *const Terrain, crater_type: ?usize, big: bool) []const Image {
+        const ct = crater_type orelse return &.{};
+        return t.sheets.craters[@intFromEnum(t.planet)][ct].images(big);
+    }
+
+    fn isStamped(t: *const Terrain, tx: i32, ty: i32) bool {
+        return t.stamped[@as(usize, @intCast(ty)) * t.width + @as(usize, @intCast(tx))];
+    }
+
+    /// Maybe (with `chance`) leave a crater at pixel (x, y): a big one
+    /// covers 2x2 tiles of the same crater type (ZMap::CreateCrater).
+    pub fn crater(t: *Terrain, rng: std.Random, x: i32, y: i32, big_wanted: bool, chance: f64) void {
+        if (rng.float(f64) > chance) return;
+        var big = big_wanted;
+        var tx = @divFloor(if (big) x - 8 else x, tile);
+        var ty = @divFloor(if (big) y - 8 else y, tile);
+        if (tx < 0 or ty < 0 or tx >= t.width or ty >= t.height) return;
+        if (tx + 1 >= t.width or ty + 1 >= t.height) big = false;
+
+        const ct = t.craterType(tx, ty);
+        if (big and t.craterImages(ct, true).len == 0) big = false;
+
+        const Point = [2]i32;
+        var ok: [4]Point = undefined;
+        var n: usize = 0;
+        if (!big) {
+            if (t.isStamped(tx, ty)) return;
+        } else {
+            // Parts already covered: settle for a small crater elsewhere.
+            for ([_]Point{ .{ tx, ty }, .{ tx + 1, ty }, .{ tx, ty + 1 }, .{ tx + 1, ty + 1 } }) |p| {
+                if (!t.isStamped(p[0], p[1])) {
+                    ok[n] = p;
+                    n += 1;
+                }
+            }
+            if (n == 0) return;
+            if (n < 4) {
+                big = false;
+                const p = ok[rng.uintLessThan(usize, n)];
+                tx = p[0];
+                ty = p[1];
+            }
+        }
+        if (big) {
+            // One big crater needs one crater type under it.
+            const others = [_]Point{ .{ tx + 1, ty }, .{ tx, ty + 1 }, .{ tx + 1, ty + 1 } };
+            var uniform = true;
+            for (others) |p| {
+                if (!std.meta.eql(t.craterType(p[0], p[1]), ct)) uniform = false;
+            }
+            if (!uniform) {
+                big = false;
+                n = 0;
+                for ([_]Point{.{ tx, ty }} ++ others) |p| {
+                    if (t.craterImages(t.craterType(p[0], p[1]), false).len > 0) {
+                        ok[n] = p;
+                        n += 1;
+                    }
+                }
+                if (n == 0) return;
+                const p = ok[rng.uintLessThan(usize, n)];
+                tx = p[0];
+                ty = p[1];
+            }
+        }
+        // (The crater type is still that of the first tile, as in ZMap.)
+        const imgs = t.craterImages(ct, big);
+        if (imgs.len == 0) return;
+        const img = imgs[rng.uintLessThan(usize, imgs.len)];
+        if (big) t.markStamped(tx * tile, ty * tile, img.width(), img.height());
+        t.ground.draw(img, null, tx * tile, ty * tile);
     }
 };
 

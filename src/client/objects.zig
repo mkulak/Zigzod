@@ -12,6 +12,8 @@ const font = @import("font.zig");
 const sprites_mod = @import("sprites.zig");
 const terrain_mod = @import("terrain.zig");
 const units = @import("units.zig");
+const protocol = @import("../net/protocol.zig");
+const effects = @import("effects.zig");
 
 const k = game.constants;
 const Object = game.object.Object;
@@ -47,11 +49,14 @@ pub const Visual = struct {
     repair_frame: u32 = 0,
     /// Bridges: intact, damaged and destroyed versions.
     bridge: ?[3]Image = null,
+    /// Buildings burn when damaged.
+    fires: effects.BuildingFires = .{ .max = 0 },
     unit: units.UnitVisual = .{},
 
-    fn deinit(v: *Visual) void {
+    fn deinit(v: *Visual, gpa: std.mem.Allocator) void {
         if (v.timer) |t| t.deinit();
         if (v.bridge) |b| for (b) |img| img.deinit();
+        v.fires.deinit(gpa);
         v.* = undefined;
     }
 
@@ -79,6 +84,7 @@ pub const Renderer = struct {
     gpa: std.mem.Allocator,
     sprites: *const Sprites,
     fonts: *const font.Fonts,
+    fx: *effects.Effects,
     visuals: std.AutoHashMapUnmanaged(i32, Visual) = .empty,
     rng: std.Random.DefaultPrng,
     /// Set when a map is loaded.
@@ -92,8 +98,8 @@ pub const Renderer = struct {
     order: std.ArrayList(*Object) = .empty,
     time: f64 = 0,
 
-    pub fn init(gpa: std.mem.Allocator, sprites: *const Sprites, fonts: *const font.Fonts) Renderer {
-        return .{ .gpa = gpa, .sprites = sprites, .fonts = fonts, .rng = .init(7) };
+    pub fn init(gpa: std.mem.Allocator, sprites: *const Sprites, fonts: *const font.Fonts, fx: *effects.Effects) Renderer {
+        return .{ .gpa = gpa, .sprites = sprites, .fonts = fonts, .fx = fx, .rng = .init(7) };
     }
 
     pub fn deinit(r: *Renderer) void {
@@ -137,14 +143,14 @@ pub const Renderer = struct {
     /// Forget all objects (new map).
     pub fn reset(r: *Renderer) void {
         var it = r.visuals.valueIterator();
-        while (it.next()) |v| v.deinit();
+        while (it.next()) |v| v.deinit(r.gpa);
         r.visuals.clearRetainingCapacity();
     }
 
     pub fn remove(r: *Renderer, ref_id: i32) void {
         if (r.visuals.fetchRemove(ref_id)) |kv| {
             var v = kv.value;
-            v.deinit();
+            v.deinit(r.gpa);
         }
     }
 
@@ -153,7 +159,10 @@ pub const Renderer = struct {
         if (!gop.found_existing) {
             gop.value_ptr.* = .{ .frame = r.rng.random().int(u8) };
             units.init(o, &gop.value_ptr.unit, r.rng.random(), r.our_team, r.time);
-            if (o.kind == .building and o.kind.building.isBridge()) gop.value_ptr.bridge = r.bridgeImages(o);
+            if (o.kind == .building) {
+                gop.value_ptr.fires = .init(o, r.rng.random());
+                if (o.kind.building.isBridge()) gop.value_ptr.bridge = r.bridgeImages(o);
+            }
         }
         return gop.value_ptr;
     }
@@ -175,10 +184,14 @@ pub const Renderer = struct {
             switch (o.kind) {
                 .flag => _ = v.tick(time, 0.2),
                 .building => |*b| r.updateBuilding(o, b, v, terrain, time),
-                .robot, .vehicle, .cannon => units.update(o, &v.unit, .{ .world = world, .time = time, .rng = r.rng.random() }),
+                .robot, .vehicle, .cannon => units.update(o, &v.unit, r.unitUpdate(world)),
                 else => {},
             }
         }
+    }
+
+    fn unitUpdate(r: *Renderer, world: *const World) units.Update {
+        return .{ .world = world, .time = r.time, .rng = r.rng.random(), .fx = r.fx };
     }
 
     // Reactions to what the server says.
@@ -191,8 +204,26 @@ pub const Renderer = struct {
         r.visual(o).unit.driver_hit = true;
     }
 
-    pub fn fireMissile(r: *Renderer, o: *const Object) void {
-        units.fireMissile(o, &r.visual(o).unit, r.time, r.rng.random());
+    pub fn fireMissile(r: *Renderer, world: *const World, o: *const Object, x: i32, y: i32) void {
+        units.fireMissile(o, &r.visual(o).unit, x, y, r.unitUpdate(world));
+    }
+
+    /// `o` was destroyed: wrecks, explosions, flying debris.
+    pub fn killed(r: *Renderer, o: *const Object, fire_death: bool, missile_death: bool, missiles: []const protocol.FireMissileInfo) void {
+        const u = &r.visual(o).unit;
+        r.fx.destroyed(o, .{ .direction = u.direction, .move_i = u.move_i }, fire_death, missile_death, missiles, r.sprites);
+    }
+
+    /// A destroyed object came back (a building was rebuilt).
+    pub fn revived(r: *Renderer, o: *const Object) void {
+        if (o.kind != .building) return;
+        r.visual(o).fires.clear();
+        if (o.kind.building.isBridge()) r.fx.bridgeDebris(o, true);
+    }
+
+    /// A driver was sniped out of `o`.
+    pub fn sniped(r: *Renderer, o: *const Object) void {
+        r.fx.robotFlip(o.owner, o.center_x, o.center_y - 4);
     }
 
     pub fn pickupGrenades(r: *Renderer, o: *const Object) void {
@@ -208,6 +239,7 @@ pub const Renderer = struct {
         const planet = @intFromEnum(terrain.planet);
         const owner = @intFromEnum(o.owner);
         const destroyed = o.isDestroyed();
+        v.fires.update(r.gpa, o, r.rng.random(), time);
 
         const production_left: i64 = if (b.state != .select) @intFromFloat(@max(b.final_time - time, 0)) else -1;
         switch (b.type) {
@@ -379,7 +411,10 @@ pub const Renderer = struct {
         for (world.objects.items) |o| {
             if (!visible(o, view, 32)) continue;
             switch (o.kind) {
-                .building => |*b| r.drawBuildingTop(cv, o, b),
+                .building => |*b| {
+                    r.drawBuildingTop(cv, o, b);
+                    r.visual(o).fires.draw(cv, r.sprites);
+                },
                 else => {},
             }
         }

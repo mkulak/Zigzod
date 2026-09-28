@@ -9,6 +9,7 @@ const terrain_mod = @import("terrain.zig");
 const font = @import("font.zig");
 const Sprites = @import("sprites.zig").Sprites;
 const Renderer = @import("objects.zig").Renderer;
+const Effects = @import("effects.zig").Effects;
 const Session = @import("session.zig").Session;
 
 const k = game.constants;
@@ -43,6 +44,7 @@ pub const App = struct {
     fonts: font.Fonts,
     sprites: *Sprites,
     objects: Renderer,
+    fx: Effects,
     session: Session,
     prng: std.Random.DefaultPrng,
     clock_origin: std.Io.Timestamp,
@@ -101,6 +103,7 @@ pub const App = struct {
             .fonts = undefined,
             .sprites = undefined,
             .objects = undefined,
+            .fx = undefined,
             .session = Session.init(gpa, conn, terrain_info, .{ .name = options.name, .team = options.team }),
             .prng = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
             .clock_origin = std.Io.Clock.awake.now(io),
@@ -108,7 +111,8 @@ pub const App = struct {
         app.sheets = terrain_mod.Sheets.load(assets, &app.palettes);
         app.fonts = font.Fonts.load(assets);
         app.sprites = try Sprites.load(gpa, assets, &app.palettes);
-        app.objects = Renderer.init(gpa, app.sprites, &app.fonts);
+        app.fx = Effects.init(gpa, app.sprites, &app.palettes, app.prng.random());
+        app.objects = Renderer.init(gpa, app.sprites, &app.fonts, &app.fx);
         try app.session.start();
         return app;
     }
@@ -117,6 +121,7 @@ pub const App = struct {
         const gpa = app.gpa;
         if (app.terrain) |*t| t.deinit();
         app.objects.deinit();
+        app.fx.deinit();
         app.sprites.deinit();
         app.fonts.deinit();
         app.sheets.deinit();
@@ -161,15 +166,19 @@ pub const App = struct {
                     break :blk null;
                 };
                 app.focused = false;
+                app.fx.reset();
                 app.objects.our_team = app.session.team;
                 app.objects.setMap(m, app.terrain_info) catch {};
             },
             .deleted_object => |id| app.objects.remove(id),
             .health_changed => |hc| if (app.session.find(hc.ref_id)) |o| {
                 if (o.health < hc.old) app.objects.hit(o);
+                if (hc.old <= 0 and !o.isDestroyed()) app.objects.revived(o);
             },
+            .destroyed => |d| app.objects.killed(d.object, d.fire_death, d.missile_death, d.missiles),
+            .snipe => |id| if (app.session.find(id)) |o| app.objects.sniped(o),
             .driver_hit => |id| if (app.session.find(id)) |o| app.objects.driverHit(o),
-            .fired_missile => |fm| if (app.session.find(fm.ref_id)) |o| app.objects.fireMissile(o),
+            .fired_missile => |fm| if (app.session.find(fm.ref_id)) |o| app.objects.fireMissile(&app.session.world, o, fm.x, fm.y),
             .pickup_grenades => |id| if (app.session.find(id)) |o| app.objects.pickupGrenades(o),
             .crane_anim => |ca| if (app.session.find(ca.ref_id)) |o| app.objects.craneAnim(o, ca.on),
             .repair_anim => |ra| if (app.session.find(ra.ref_id)) |o| {
@@ -186,6 +195,7 @@ pub const App = struct {
                 if (app.terrain) |*t| t.deinit();
                 app.terrain = null;
                 app.objects.reset();
+                app.fx.reset();
             },
             .news => |n| std.log.info("news: {s}", .{n.text}),
             else => {},
@@ -273,10 +283,13 @@ pub const App = struct {
         if (app.terrain) |*t| {
             const world = &app.session.world;
             app.objects.update(world, t, world.now());
+            app.fx.update(.{ .time = world.now(), .world = world, .terrain = t });
             t.draw(cv, view, world.now(), world.zones.items, app.prng.random());
+            app.fx.drawGround(cv, view);
             app.objects.drawPre(cv, world, view);
             app.objects.draw(cv, world, view);
             app.objects.drawAfter(cv, world, view);
+            app.fx.draw(cv, view);
         }
         _ = now;
         _ = c.SDL_Flip(app.screen.surface);

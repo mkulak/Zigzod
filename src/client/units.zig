@@ -5,6 +5,7 @@ const std = @import("std");
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const Sprites = @import("sprites.zig").Sprites;
+const Effects = @import("effects.zig").Effects;
 
 const k = game.constants;
 const Object = game.object.Object;
@@ -76,6 +77,10 @@ pub const UnitVisual = struct {
     crane_anim: bool = false,
     hook_i: u8 = 0,
     next_hook_time: f64 = 0,
+    /// Tracks and dust are left behind every 0.2 s.
+    next_track_time: f64 = 0,
+    /// APCs: when each passenger shoots next.
+    passenger_shots: [8]f64 = @splat(0),
 
     // Robots.
     mode: RobotMode = .standing,
@@ -118,6 +123,7 @@ pub const Update = struct {
     world: *const World,
     time: f64,
     rng: std.Random,
+    fx: *Effects,
 };
 
 /// Advance a unit's animations.
@@ -189,11 +195,17 @@ fn updateCannon(o: *const Object, kind: k.Cannon, v: *UnitVisual, target: ?*Obje
         return;
     }
     if (kind == .gatling) if (target) |tg| {
-        // Rattle: alternate frames while shooting.
+        // Rattle: alternate frames while shooting, a bullet every other.
         if (t < v.next_attack_time) return;
         v.firing = !v.firing;
         v.next_attack_time = t + 0.07 + @as(f64, @floatFromInt(u.rng.uintLessThan(u32, 100))) * 0.0003;
         if (directionTo(o, tg)) |d| v.direction = d;
+        if (v.firing) {
+            const bullet_x = [8]i32{ 18, 13, 0, -13, -18, -16, -1, 13 };
+            const bullet_y = [8]i32{ -3, -16, -18, -16, -3, 10, 13, 10 };
+            const p = u.fx.pointOn(tg);
+            u.fx.bullet(o.owner, o.center_x + bullet_x[v.direction], o.center_y - 7 + bullet_y[v.direction], p[0], p[1]);
+        }
         return;
     };
     if (t - v.last_process_time < 1.0 or o.owner == .none) return;
@@ -223,6 +235,11 @@ fn updateVehicle(o: *const Object, kind: k.Vehicle, lid_open: bool, v: *UnitVisu
         else => {},
     }
 
+    if (v.moving and t >= v.next_track_time) {
+        v.next_track_time = t + 0.2;
+        if (u.world.map) |*m| u.fx.vehicleTrail(o, v.direction, m, u.world.terrain);
+    }
+
     // Tracks and wheels.
     if (v.moving and t >= v.next_move_time) {
         switch (kind) {
@@ -244,6 +261,19 @@ fn updateVehicle(o: *const Object, kind: k.Vehicle, lid_open: bool, v: *UnitVisu
                     v.firing = !v.firing;
                     v.next_attack_time = t + 0.07 + @as(f64, @floatFromInt(u.rng.uintLessThan(u32, 100))) * 0.0003;
                     if (directionTo(o, tg)) |d| v.turret = d;
+                    if (v.firing) {
+                        // From the gun on the bouncing jeep.
+                        const turret_x = [8]i32{ 0, 6, 12, 20, 25, 20, 15, 5 };
+                        const turret_y = [8]i32{ 2, 7, 4, 8, 2, -4, -3, -4 };
+                        const shift_x = [8]i32{ 0, -2, -5, -8, -10, -8, -5, -2 };
+                        const shift_y = [8]i32{ 0, 0, 0, 0, 0, 5, 6, 5 };
+                        const bullet_x = [8]i32{ 17, 14, 7, 0, -3, -3, 7, 15 };
+                        const bullet_y = [8]i32{ 10, 1, -2, 0, 10, 16, 17, 15 };
+                        const x = o.x + turret_x[v.direction] + shift_x[v.turret] + bullet_x[v.turret];
+                        const y = o.y + turret_y[v.direction] + shift_y[v.turret] + bullet_y[v.turret] - @intFromBool(v.jeep_bounce);
+                        const p = u.fx.pointOn(tg);
+                        u.fx.bullet(o.owner, x, y, p[0], p[1]);
+                    }
                 }
             } else if (t >= v.next_turret_time) {
                 v.next_turret_time = t + 1.0;
@@ -255,6 +285,22 @@ fn updateVehicle(o: *const Object, kind: k.Vehicle, lid_open: bool, v: *UnitVisu
                 v.next_turret_time = t + 1.0;
                 v.turret +%= 1;
             }
+            // Passengers shoot out of the APC (toughs fire rockets, which
+            // the server announces).
+            if (target) |tg| if (kind == .apc and !o.damage_is_missile) {
+                const n = @min(o.drivers.items.len, v.passenger_shots.len);
+                for (v.passenger_shots[0..n]) |*next| {
+                    if (t < next.*) continue;
+                    next.* = t + o.damage_interval + 0.012 * @as(f64, @floatFromInt(u.rng.uintLessThan(u32, 10)));
+                    const p = u.fx.pointOn(tg);
+                    switch (o.driver_type) {
+                        .grunt, .psycho, .sniper => u.fx.bullet(o.owner, o.x + 16, o.y + 16, p[0], p[1]),
+                        .pyro => u.fx.flame(o.x + 16, o.y + 16, p[0], p[1]),
+                        .laser => u.fx.laser(o.x + 16, o.y + 16, p[0], p[1]),
+                        .tough => {},
+                    }
+                }
+            };
             if (kind == .crane and v.crane_anim and t >= v.next_hook_time) {
                 v.next_hook_time = t + 0.01;
                 v.hook_i = (v.hook_i + 1) % 16;
@@ -339,6 +385,24 @@ fn updateRobot(o: *const Object, kind: k.Robot, v: *UnitVisual, target: ?*Object
     if (v.mode != .attacking or t < v.next_attack_time) return;
     if (kind != .tough and throwsGrenades(o, u.world, target)) return;
     const jitter = @as(f64, @floatFromInt(rng.uintLessThan(u32, 100)));
+    defer if (target) |tg| {
+        // The frame where the gun goes off.
+        const shoots = switch (kind) {
+            .grunt, .sniper => v.action_i == 4,
+            .psycho => v.action_i != 0,
+            .pyro, .laser => v.action_i == 2,
+            .tough => false,
+        };
+        if (shoots) {
+            const p = u.fx.pointOn(tg);
+            const m = Effects.robotMuzzle(v.direction);
+            switch (kind) {
+                .pyro => u.fx.flame(o.x + 8 + m[0], o.y + 8 + m[1], p[0], p[1]),
+                .laser => u.fx.laser(o.x + 8 + m[0], o.y + 8 + m[1], p[0], p[1]),
+                else => u.fx.bullet(o.owner, o.x + 8, o.y + 8, p[0], p[1]),
+            }
+        }
+    };
     switch (kind) {
         .grunt, .sniper => {
             v.action_i += 1;
@@ -367,16 +431,23 @@ fn updateRobot(o: *const Object, kind: k.Robot, v: *UnitVisual, target: ?*Object
     }
 }
 
-/// The server says the unit fired a missile.
-pub fn fireMissile(o: *const Object, v: *UnitVisual, time: f64, rng: std.Random) void {
-    const jitter = @as(f64, @floatFromInt(rng.uintLessThan(u32, 100)));
+/// The server says the unit fired a missile at (x, y).
+pub fn fireMissile(o: *const Object, v: *UnitVisual, x: i32, y: i32, u: Update) void {
+    const time = u.time;
+    const jitter = @as(f64, @floatFromInt(u.rng.uintLessThan(u32, 100)));
+    const target = u.world.findOpt(o.attack_target);
+    // Toughs fire rockets (only while attacking); other robots throw
+    // grenades.
+    const tough = o.kind == .robot and o.kind.robot == .tough;
+    if (tough and v.mode != .attacking) return;
+    u.fx.fireMissile(o, x, y, v.direction, v.turret, target, tough);
     switch (o.kind) {
         .cannon => |cn| if (cn.type == .howitzer or cn.type == .missile_cannon) {
             v.firing = true;
             v.fire_until = time + 0.05 + jitter * 0.0003;
         },
-        .robot => |rb| {
-            if (rb == .tough and v.mode == .attacking and o.grenades == 0) {
+        .robot => {
+            if (tough) {
                 v.action_i = 1;
                 v.next_attack_time = time + 0.05 + jitter * 0.0003;
             } else {

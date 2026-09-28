@@ -6,6 +6,7 @@ pub const font = @import("client/font.zig");
 pub const sprites = @import("client/sprites.zig");
 pub const objects = @import("client/objects.zig");
 pub const units = @import("client/units.zig");
+pub const effects = @import("client/effects.zig");
 pub const session = @import("client/session.zig");
 pub const app = @import("client/app.zig");
 

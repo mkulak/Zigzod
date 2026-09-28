@@ -25,7 +25,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
 
 ## Layout
 
-    src/main.zig          the `zod` program (so far: `zod server`)
+    src/main.zig          the `zod` program: `zod server`, `zod client`
     src/game.zig          game data and rules shared by all programs
       game/constants.zig  enums (teams, unit types, ...) - wire values
       game/settings.zig   unit stats / tunables, also the SET_SETTINGS message
@@ -46,6 +46,17 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       server/server.zig   players, handshake, messages, votes, map rotation
       server/commands.zig chat commands (/help, /changemap, ...)
       server/bots.zig     bots (C++ zod_engine processes for now)
+    src/client.zig        the game client (work in progress)
+      client/session.zig  connection and game state kept in sync with the
+                          server; reports what happened as events
+      client/gfx.zig      images, drawing with clipping, team colors
+      client/terrain.zig  the ground, animated water, zone markers, craters
+      client/sprites.zig  all object and effect images
+      client/objects.zig  object animations and drawing (buildings, items)
+      client/units.zig    cannon, vehicle and robot animations
+      client/effects.zig  shots, explosions, debris, wrecks, fires, tracks
+      client/font.zig     bitmap fonts
+      client/app.zig      window, main loop, camera
 
     src/root.zig          (transitional) Zig code linked into the C++ programs:
                           common, ztime, zencrypt_aes, sdl_rotozoom, zfont
@@ -63,6 +74,9 @@ run from the repository root.
    it. The C++ server code is still built because `zod_engine` without `-c`
    starts one in-process.
 3. **Client** - rendering (SDL/OpenGL), HUD, menus, sound and music.
+   In progress: `zod client` connects, keeps the game in sync and draws the
+   map, all objects with their animations, and the effects. Missing: HUD,
+   minimap, selecting and ordering units, menus, sound.
 4. **Bot**, then **map editor**.
 5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
 
@@ -84,4 +98,7 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   could be NaN; a destroyed back fort did not stop buildings in its zone from
   repairing themselves;
 * new units get their factory's rally points before they are announced, so
-  clients see the full route.
+  clients see the full route;
+* rotated and scaled effect images are cached per angle and size; the C++
+  cache was invalidated the wrong way round (rebuilt when nothing changed,
+  kept stale when the angle or size did).
