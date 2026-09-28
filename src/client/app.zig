@@ -41,7 +41,7 @@ pub const App = struct {
     sheets: terrain_mod.Sheets,
     terrain: ?terrain_mod.Terrain = null,
     fonts: font.Fonts,
-    sprites: Sprites,
+    sprites: *Sprites,
     objects: Renderer,
     session: Session,
     prng: std.Random.DefaultPrng,
@@ -107,8 +107,8 @@ pub const App = struct {
         };
         app.sheets = terrain_mod.Sheets.load(assets, &app.palettes);
         app.fonts = font.Fonts.load(assets);
-        app.sprites = Sprites.load(assets, &app.palettes);
-        app.objects = Renderer.init(gpa, &app.sprites, &app.fonts);
+        app.sprites = try Sprites.load(gpa, assets, &app.palettes);
+        app.objects = Renderer.init(gpa, app.sprites, &app.fonts);
         try app.session.start();
         return app;
     }
@@ -161,10 +161,17 @@ pub const App = struct {
                     break :blk null;
                 };
                 app.focused = false;
-                app.objects.reset();
-                app.objects.planet = m.planet();
+                app.objects.our_team = app.session.team;
+                app.objects.setMap(m, app.terrain_info) catch {};
             },
             .deleted_object => |id| app.objects.remove(id),
+            .health_changed => |hc| if (app.session.find(hc.ref_id)) |o| {
+                if (o.health < hc.old) app.objects.hit(o);
+            },
+            .driver_hit => |id| if (app.session.find(id)) |o| app.objects.driverHit(o),
+            .fired_missile => |fm| if (app.session.find(fm.ref_id)) |o| app.objects.fireMissile(o),
+            .pickup_grenades => |id| if (app.session.find(id)) |o| app.objects.pickupGrenades(o),
+            .crane_anim => |ca| if (app.session.find(ca.ref_id)) |o| app.objects.craneAnim(o, ca.on),
             .repair_anim => |ra| if (app.session.find(ra.ref_id)) |o| {
                 app.objects.repairAnim(o, ra.on, ra.remaining_time, app.session.world.now());
             },
@@ -269,26 +276,9 @@ pub const App = struct {
             t.draw(cv, view, world.now(), world.zones.items, app.prng.random());
             app.objects.drawPre(cv, world, view);
             app.objects.draw(cv, world, view);
-            app.renderUnits(cv, view);
             app.objects.drawAfter(cv, world, view);
         }
         _ = now;
         _ = c.SDL_Flip(app.screen.surface);
-    }
-
-    /// Placeholder until the units' graphics are ported: team colored
-    /// boxes with a health bar.
-    fn renderUnits(app: *App, cv: gfx.Canvas, view: gfx.Rect) void {
-        for (app.session.world.objects.items) |o| {
-            if (!o.isUnit()) continue;
-            const r: gfx.Rect = .{ .x = o.x, .y = o.y, .w = o.width_pix, .h = o.height_pix };
-            if (r.intersect(view) == null) continue;
-            const color = app.palettes.color(o.owner);
-            cv.outline(r, if (o.isDestroyed()) gfx.Color{ .r = 60, .g = 60, .b = 60 } else color);
-            if (o.isUnit()) {
-                const w: i32 = @intFromFloat(@as(f64, @floatFromInt(r.w)) * o.healthRatio());
-                cv.fill(.{ .x = r.x, .y = r.y - 3, .w = w, .h = 2 }, .{ .r = 0, .g = 200, .b = 0 });
-            }
-        }
     }
 };

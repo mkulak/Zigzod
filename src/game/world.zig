@@ -506,6 +506,27 @@ pub const World = struct {
         var n: usize = 0;
         var missile_damage: i32 = 0;
         const missile_radius: i32 = 40;
+        const mh = w.settings.max_turrent_horizontal_distance;
+        const mv = w.settings.max_turrent_vertical_distance;
+        // Cannons and tanks throw their turret (the missile they fire when
+        // they blow up).
+        const turret_delay: ?[2]i32 = switch (o.kind) {
+            .cannon => .{ 7, 300 },
+            .vehicle => |v| switch (v.type) {
+                .light, .medium, .heavy => .{ 3, 100 },
+                else => null,
+            },
+            else => null,
+        };
+        if (turret_delay) |d| {
+            missiles[0] = .{
+                .offset_time = @as(f64, @floatFromInt(d[0])) + 0.01 * @as(f64, @floatFromInt(w.randInt(d[1]))),
+                .x = (o.x + 16) + (mh - w.randInt(mh + mh)),
+                .y = (o.y + 16) + (mv - w.randInt(mv + mv)),
+            };
+            n = 1;
+            missile_damage = 40;
+        }
         switch (o.kind) {
             .item => |item| if (item == .grenades) {
                 const max_off = 130;
@@ -518,8 +539,6 @@ pub const World = struct {
                     missile_damage = @intFromFloat(w.settings.grenade_damage * k.max_unit_health);
                 }
             } else if (item.mapObjectIndex() != null) {
-                const mh = w.settings.max_turrent_horizontal_distance;
-                const mv = w.settings.max_turrent_vertical_distance;
                 missiles[0] = .{
                     .offset_time = 3 + 0.01 * @as(f64, @floatFromInt(w.randInt(100))),
                     .x = (o.x + 16) + (mh - w.randInt(mh + mh)),
@@ -540,7 +559,11 @@ pub const World = struct {
             });
         }
 
-        var header: protocol.DestroyObject = .{
+        // Destroyed objects that go away are deleted with the next step
+        // (DELETE_OBJECT). The original meant to say so with
+        // `destroy_object`, but always sent false; C++ clients remove the
+        // object at once when it is true, so it stays false.
+        const header: protocol.DestroyObject = .{
             .ref_id = o.ref_id,
             .fire_missile_amount = @intCast(n),
             .killer_ref_id = killer orelse -1,
@@ -548,10 +571,7 @@ pub const World = struct {
             .do_fire_death = t - o.damaged_by_fire_time < 1.5,
             .do_missile_death = t - o.damaged_by_missile_time < 1.5,
         };
-        if (o.can_be_destroyed) {
-            if (o.kill_time == null) o.kill_time = t;
-            header.destroy_object = true;
-        }
+        if (o.can_be_destroyed and o.kill_time == null) o.kill_time = t;
         var payload: std.ArrayList(u8) = .empty;
         defer payload.deinit(w.gpa);
         try payload.appendSlice(w.gpa, std.mem.asBytes(&header));

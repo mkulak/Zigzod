@@ -11,6 +11,7 @@ const gfx = @import("gfx.zig");
 const font = @import("font.zig");
 const sprites_mod = @import("sprites.zig");
 const terrain_mod = @import("terrain.zig");
+const units = @import("units.zig");
 
 const k = game.constants;
 const Object = game.object.Object;
@@ -46,6 +47,7 @@ pub const Visual = struct {
     repair_frame: u32 = 0,
     /// Bridges: intact, damaged and destroyed versions.
     bridge: ?[3]Image = null,
+    unit: units.UnitVisual = .{},
 
     fn deinit(v: *Visual) void {
         if (v.timer) |t| t.deinit();
@@ -81,6 +83,14 @@ pub const Renderer = struct {
     rng: std.Random.DefaultPrng,
     /// Set when a map is loaded.
     planet: ?k.Planet = null,
+    our_team: k.Team = .none,
+    /// How deep robots sink into water, per map tile.
+    submerge: []u8 = &.{},
+    map_width: u32 = 0,
+    map_height: u32 = 0,
+    /// Draw order scratch list.
+    order: std.ArrayList(*Object) = .empty,
+    time: f64 = 0,
 
     pub fn init(gpa: std.mem.Allocator, sprites: *const Sprites, fonts: *const font.Fonts) Renderer {
         return .{ .gpa = gpa, .sprites = sprites, .fonts = fonts, .rng = .init(7) };
@@ -89,6 +99,39 @@ pub const Renderer = struct {
     pub fn deinit(r: *Renderer) void {
         r.reset();
         r.visuals.deinit(r.gpa);
+        r.gpa.free(r.submerge);
+        r.order.deinit(r.gpa);
+    }
+
+    /// A new map: robots sink 8 pixels into water, 6 near its shore.
+    pub fn setMap(r: *Renderer, m: *const game.map.Map, info: *const game.map.Terrain) !void {
+        r.reset();
+        r.planet = m.planet();
+        const palette = info.palette(m.planet());
+        const w: usize = m.header.width;
+        const h: usize = m.header.height;
+        r.gpa.free(r.submerge);
+        r.submerge = try r.gpa.alloc(u8, w * h);
+        r.map_width = @intCast(w);
+        r.map_height = @intCast(h);
+        for (r.submerge, m.tiles) |*sm, t| sm.* = if (palette[t].is_water) 8 else 0;
+        for (0..h) |j| for (0..w) |i| {
+            if (r.submerge[j * w + i] != 8) continue;
+            shore: for (i -| 1..@min(i + 3, w)) |ni| for (j -| 1..@min(j + 3, h)) |nj| {
+                if (r.submerge[nj * w + ni] == 0) {
+                    r.submerge[j * w + i] = 6;
+                    break :shore;
+                }
+            };
+        };
+    }
+
+    fn submergeAt(r: *const Renderer, x: i32, y: i32) i32 {
+        if (x < 0 or y < 0) return 0;
+        const tx: u32 = @intCast(@divTrunc(x, 16));
+        const ty: u32 = @intCast(@divTrunc(y, 16));
+        if (tx >= r.map_width or ty >= r.map_height) return 0;
+        return r.submerge[ty * r.map_width + tx];
     }
 
     /// Forget all objects (new map).
@@ -109,6 +152,7 @@ pub const Renderer = struct {
         const gop = r.visuals.getOrPut(r.gpa, o.ref_id) catch @panic("out of memory");
         if (!gop.found_existing) {
             gop.value_ptr.* = .{ .frame = r.rng.random().int(u8) };
+            units.init(o, &gop.value_ptr.unit, r.rng.random(), r.our_team, r.time);
             if (o.kind == .building and o.kind.building.isBridge()) gop.value_ptr.bridge = r.bridgeImages(o);
         }
         return gop.value_ptr;
@@ -125,14 +169,38 @@ pub const Renderer = struct {
     // -----------------------------------------------------------------------
 
     pub fn update(r: *Renderer, world: *const World, terrain: *terrain_mod.Terrain, time: f64) void {
+        r.time = time;
         for (world.objects.items) |o| {
             const v = r.visual(o);
             switch (o.kind) {
                 .flag => _ = v.tick(time, 0.2),
                 .building => |*b| r.updateBuilding(o, b, v, terrain, time),
+                .robot, .vehicle, .cannon => units.update(o, &v.unit, .{ .world = world, .time = time, .rng = r.rng.random() }),
                 else => {},
             }
         }
+    }
+
+    // Reactions to what the server says.
+
+    pub fn hit(r: *Renderer, o: *const Object) void {
+        r.visual(o).unit.hit = true;
+    }
+
+    pub fn driverHit(r: *Renderer, o: *const Object) void {
+        r.visual(o).unit.driver_hit = true;
+    }
+
+    pub fn fireMissile(r: *Renderer, o: *const Object) void {
+        units.fireMissile(o, &r.visual(o).unit, r.time, r.rng.random());
+    }
+
+    pub fn pickupGrenades(r: *Renderer, o: *const Object) void {
+        units.pickupGrenades(&r.visual(o).unit);
+    }
+
+    pub fn craneAnim(r: *Renderer, o: *const Object, on: bool) void {
+        r.visual(o).unit.crane_anim = on;
     }
 
     fn updateBuilding(r: *Renderer, o: *const Object, b: *const game.object.Building, v: *Visual, terrain: *terrain_mod.Terrain, time: f64) void {
@@ -270,11 +338,21 @@ pub const Renderer = struct {
         }
     }
 
+    /// Items and units, farther ones (by their bottom edge) first.
     pub fn draw(r: *Renderer, cv: Canvas, world: *const World, view: gfx.Rect) void {
         const s = r.sprites;
         const planet = if (r.planet) |p| @intFromEnum(p) else return;
+        r.order.clearRetainingCapacity();
         for (world.objects.items) |o| {
-            if (!visible(o, view, 32)) continue;
+            if (o.kind == .building or !visible(o, view, 32)) continue;
+            r.order.append(r.gpa, o) catch return;
+        }
+        std.mem.sort(*Object, r.order.items, {}, struct {
+            fn lessThan(_: void, a: *Object, b: *Object) bool {
+                return a.y + a.height_pix < b.y + b.height_pix;
+            }
+        }.lessThan);
+        for (r.order.items) |o| {
             switch (o.kind) {
                 .flag => if (s.flag[@intFromEnum(o.owner)][r.visual(o).frame % 4]) |img| cv.draw(img, o.x, o.y),
                 .item => |item| switch (item) {
@@ -287,7 +365,11 @@ pub const Renderer = struct {
                         if (s.map_object[i]) |img| cv.draw(img, o.x, o.y + 16 - img.height());
                     },
                 },
-                else => {},
+                .robot, .vehicle, .cannon => {
+                    const sub = if (o.kind == .robot) r.submergeAt(o.x + 8, o.y + 8) else 0;
+                    units.draw(cv, s, o, &r.visual(o).unit, world, sub);
+                },
+                .building => {},
             }
         }
     }
