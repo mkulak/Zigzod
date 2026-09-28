@@ -163,6 +163,61 @@ pub const Image = struct {
         return .fromArgb(img.row(y)[@intCast(x)]);
     }
 
+    /// A new image of this one turned `angle` degrees counterclockwise and
+    /// scaled by `zoom`, nearest pixel (SDL_gfx's rotozoomSurface without
+    /// smoothing, whose fixed-point stepping this follows).
+    pub fn rotozoom(img: Image, angle: f64, zoom_in: f64) ?Image {
+        const zoom = @max(@abs(zoom_in), 0.001);
+        if (@abs(angle) <= 0.001) return img.zoomed(zoom);
+        const rad = angle * (std.math.pi / 180.0);
+        const sin = @sin(rad) * zoom;
+        const cos = @cos(rad) * zoom;
+        const hw: f64 = @floatFromInt(img.width() >> 1);
+        const hh: f64 = @floatFromInt(img.height() >> 1);
+        const half_w: i32 = @max(@as(i32, @intFromFloat(@ceil(@max(@abs(cos * hw + sin * hh), @abs(cos * hw - sin * hh))))), 1);
+        const half_h: i32 = @max(@as(i32, @intFromFloat(@ceil(@max(@abs(sin * hw + cos * hh), @abs(sin * hw - cos * hh))))), 1);
+        const out = create(2 * half_w, 2 * half_h) orelse return null;
+        const w = img.width();
+        const h = img.height();
+        const zoominv = 65536.0 / (zoom * zoom);
+        const isin: i32 = @intFromFloat(sin * zoominv);
+        const icos: i32 = @intFromFloat(cos * zoominv);
+        const cx = half_w;
+        const cy = half_h;
+        const xd = (w - out.width()) *% (1 << 15);
+        const yd = (h - out.height()) *% (1 << 15);
+        const ax = cx *% (1 << 16) -% icos *% cx;
+        const ay = cy *% (1 << 16) -% isin *% cx;
+        var y: i32 = 0;
+        while (y < out.height()) : (y += 1) {
+            const row_out = out.row(y);
+            const dy = cy - y;
+            var sx = ax +% isin *% dy +% xd;
+            var sy = ay -% icos *% dy +% yd;
+            for (row_out) |*p| {
+                const px: i32 = @as(i16, @truncate(sx >> 16));
+                const py: i32 = @as(i16, @truncate(sy >> 16));
+                p.* = if (px >= 0 and py >= 0 and px < w and py < h) img.row(py)[@intCast(px)] else 0;
+                sx +%= icos;
+                sy +%= isin;
+            }
+        }
+        return out;
+    }
+
+    /// Scaled by `zoom`, nearest pixel.
+    fn zoomed(img: Image, zoom: f64) ?Image {
+        const w = img.width();
+        const h = img.height();
+        const out = create(@max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(w)) * zoom)), 1), @max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(h)) * zoom)), 1)) orelse return null;
+        var y: i32 = 0;
+        while (y < out.height()) : (y += 1) {
+            const src = img.row(@divTrunc(y * h, out.height()));
+            for (out.row(y), 0..) |*p, x| p.* = src[@intCast(@divTrunc(@as(i32, @intCast(x)) * w, out.width()))];
+        }
+        return out;
+    }
+
     /// In our ARGB layout (the screen may lack the alpha byte).
     fn standard(img: Image) bool {
         const f = img.surface.format.*;
@@ -497,4 +552,28 @@ test "images, recoloring and drawing" {
     // dx moves it to x = 0, where the transparent pixel is.
     try std.testing.expectEqual(@as(u8, 0), screen.pixel(0, 4).b);
     try std.testing.expectEqual(Color{ .r = 0x13, .g = 0x37, .b = 0xFB }, screen.pixel(1, 4));
+}
+
+test "rotating and scaling" {
+    // A 4x2 image: left half red, right half blue.
+    const img = Image.create(4, 2).?;
+    defer img.deinit();
+    for (0..2) |y| for (img.row(@intCast(y)), 0..) |*p, x| {
+        p.* = if (x < 2) 0xFFFF0000 else 0xFF0000FF;
+    };
+    const big = img.rotozoom(0, 2).?;
+    defer big.deinit();
+    try std.testing.expectEqual(8, big.width());
+    try std.testing.expectEqual(4, big.height());
+    try std.testing.expectEqual(0xFFFF0000, big.row(3)[3]);
+    try std.testing.expectEqual(0xFF0000FF, big.row(3)[4]);
+    // A quarter turn counterclockwise: the right half ends up on top.
+    const turned = img.rotozoom(90, 1).?;
+    defer turned.deinit();
+    try std.testing.expectEqual(4, turned.width());
+    try std.testing.expectEqual(4, turned.height());
+    try std.testing.expectEqual(0xFF0000FF, turned.row(1)[1]);
+    try std.testing.expectEqual(0xFFFF0000, turned.row(3)[2]);
+    // Outside the turned image is transparent.
+    try std.testing.expectEqual(0, turned.row(0)[0]);
 }

@@ -1,91 +1,71 @@
-# Qt_ZodEngine
-Old game Z, Z95, Z-Expansion Kit - new engine
+# Zigzod
 
-This is an ZodEngine revision.
-The original is located here:
-http://zod.sourceforge.net  http://www.nighsoft.com
+The Zod Engine in Zig: an open source remake of the 1996 real-time strategy
+game Z by the Bitmap Brothers.
 
-" Welcome to the Zod Engine project. The Zod Engine is an open source remake of the 1996 game Z by the Bitmap Brothers written in C++ using the SDL library for Linux / Windows / Etc."
+This is a rewrite of the Zod Engine (http://zod.sourceforge.net,
+http://www.nighsoft.com; forum: http://zzone.lewe.com), which was written in
+C++. The game, its rules, its network protocol and its data files (maps,
+settings, art, sounds) are the same; docs/ZIG_PORT.md tells how the port was
+done and where it deliberately differs from the original.
 
-A forum for the discussion here http://zzone.lewe.com. 
-A branch for open source here http://zzone.lewe.com/forum/viewforum.php?f=5
+One program, `zod`, does everything:
 
-This option is divided into dynamic libraries. Project files for IDE QtCreator (qmake build system).
-Building with Ubuntu LTS 18.04.1.
+    zod play      play on this computer (a server with bots, and you)
+    zod server    run a game server
+    zod client    join a server
+    zod bot       add a computer player to a server
+    zod edit      the map editor
 
-Before running the binaries, remember to add the path to the libraries to the environment variable:
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/your/custom/path_to_folder_bin_ZodEngine/lib
+`zod --help` lists their options.
 
 
-=== Building (Zig toolchain; macOS Apple Silicon/Intel and Linux) ======
+## Building (macOS and Linux)
 
-This branch is being ported from C++ to Zig one module at a time. The ported
-modules live in src/*.zig; the rest is still the original C++ in
-ZodEgine_Libs/, zod_engine/ and zod_map_editor/. Everything is built with
-build.zig; the old qmake project files no longer work here, because the C++
-code now calls functions that are implemented in Zig.
+Requires Zig 0.16.0 or newer (https://ziglang.org/download/, or
+`brew install zig`) and SDL 1.2 with SDL_image and SDL_mixer.
 
-Requires Zig 0.16.0 or newer (https://ziglang.org/download/, or: brew install zig).
-It does not need Qt, wxWidgets or MySQL.
+1. macOS: install the Xcode command line tools and Homebrew
+   (https://brew.sh), then build the SDL add-ons once:
 
-1. macOS only: install the Xcode command line tools and Homebrew (https://brew.sh):
        xcode-select --install
-
-2. Build the SDL 1.2 dependencies once (installs the Homebrew packages it
-   needs and builds SDL_image / SDL_mixer / SDL_ttf 1.2 into deps/):
        ./macos/build_deps.sh
 
-3. Build and play:
-       zig build                  # -> zig-out/bin/zod_engine, zod_map_editor and zod
-       zig build run              # campaign in an 800x600 window, you = red vs blue bot
-       zig build run -- -h        # all game options (anything after -- replaces the defaults)
-       zig build run -- -l map_list.txt -t red -b blue -w -o     # e.g. without OpenGL
-       zig build run-editor -- -f blank_maps/level_blank_01.map
-       zig build test             # unit tests of the Zig modules
+   This installs sdl12-compat (SDL 1.2 running on SDL2, native on Apple
+   Silicon) with Homebrew and builds SDL_image and SDL_mixer 1.2 into deps/.
+   Linux: install the development packages of SDL 1.2, SDL_image 1.2 and
+   SDL_mixer 1.2 (Debian/Ubuntu: libsdl1.2-dev libsdl-image1.2-dev
+   libsdl-mixer1.2-dev), or run ./macos/build_deps.sh as well.
 
-   ./macos/run_zod.sh [--editor] [options] runs the built programs the same way.
+2. Build and play:
 
-   The game server has been ported to Zig (zig-out/bin/zod). To play on it:
-       zig build run-server -- -l map_list.txt -b blue     # in one terminal
-       ./zig-out/bin/zod_engine -c localhost -t red -w     # in another
-   or just ./macos/run_zod.sh --zig-server. 'zod server -h' lists its options.
+       zig build                  # -> zig-out/bin/zod
+       zig build run              # the campaign as red against a blue bot
+       zig build run -- play -m ../Data/Campaing/Z_original/p02_bb_orig01.map -r 1024x768
+       zig build run -- edit my.map -n 64x64 -P desert -N "My map"
+       zig build test             # unit tests
 
-   The game data lives in bin/, and relative map paths are relative to bin/.
-   The programs in zig-out/bin/ can also be started from any directory; they
-   switch to bin/ themselves when assets/ isn't in the current directory.
+   ./macos/run_zod.sh [command options] does the same as `zig build run`.
 
-Build options: -Doptimize=Debug|ReleaseSafe|ReleaseFast|ReleaseSmall (default
-ReleaseFast), -Dopengl=false, -Ddeps-prefix=/path (default deps/install).
-SDL is found through pkg-config (including Homebrew on macOS), so only native
-builds are supported, not cross-compilation.
+The game data lives in bin/; map and settings paths given to `zod play` and
+`zod server` are relative to it (-D picks another folder).
 
-Notes:
-* SDL 1.2 comes from Homebrew's "sdl12-compat", which runs on SDL2 and
-  builds natively for arm64.
-* Homebrew no longer ships the SDL 1.2 versions of SDL_image, SDL_mixer and
-  SDL_ttf, so macos/build_deps.sh builds them from the maintained SDL-1.2
-  branches at github.com/libsdl-org. Delete deps/ to rebuild them.
-* On Linux, install the -dev packages for SDL 1.2, libpng, libjpeg,
-  freetype, libvorbis and mpg123 first.
-* Some sound files the code refers to (for example assets/sounds/explosion_*.wav)
-  are not in this repository. The game prints "could not load" for them and runs without them.
+Build options: -Doptimize=Debug|ReleaseSafe|ReleaseFast|ReleaseSmall
+(default ReleaseFast), -Ddeps-prefix=/path (default deps/install). SDL is
+found through pkg-config (including Homebrew's on macOS), so only native
+builds are supported.
+
+Some sound files the game refers to (for example
+assets/sounds/explosion_*.wav) are not in this repository; the game says it
+could not load them and plays without them.
 
 
-=== for linux systems ======
-" Installing the required libraries -
-The required libraries for this game are as follows...
-* SDL
-* SDL_ttf
-* SDL_mixer
-* SDL_image
-* libmysqlclient (or sometimes called libmysql)
-* wx (sometimes called libwx, or libwxgtk)
-Notes: It is possible to compile the game without mysql support. 
-Also wx is only needed for the zod_launcher.
+## Playing over a network
 
-Installing the required libraries on Ubuntu:
-sudo apt-get install libsdl-dev libsdl-ttf2.0-dev libsdl-mixer1.2-dev 
-libsdl-image1.2-dev libmysqlclient-dev libwxgtk2.8-dev "
+    zod server -l map_list.txt -b blue        # on one computer
+    zod client -c <server address> -t red     # on each player's computer
 
-
-
+Players can change teams, start and stop bots, pick maps, change the game
+speed and pause from the in-game menu (Escape or the Menu button); some
+changes are put to a vote (F1 yes, F2 no, F3 pass). Chat with Enter; chat
+commands start with / (/help lists them).

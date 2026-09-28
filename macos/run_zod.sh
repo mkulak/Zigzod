@@ -1,54 +1,21 @@
 #!/usr/bin/env bash
 #
-# Run the game (or, with --editor, the map editor).
+# Run zod (build it first with `zig build`). Without arguments it plays the
+# campaign as red against a blue bot; otherwise the arguments are a zod
+# command (see ./macos/run_zod.sh --help):
 #
-# Without arguments it starts the original campaign in an 800x600 window
-# against a bot. Any arguments replace these defaults (see ./macos/run_zod.sh -h).
-# Map/list paths are relative to bin/, where the game data lives.
-#
-#   ./macos/run_zod.sh                      # campaign, windowed
-#   ./macos/run_zod.sh -o                   # campaign without OpenGL
-#   ./macos/run_zod.sh -m ../Data/Campaing/Z_original/p02_bb_orig01.map -t red -b blue -w
-#   ./macos/run_zod.sh --editor -f blank_maps/level_blank_01.map
-#   ./macos/run_zod.sh --editor -n -f ~/my.map -d 64x64 -p desert -m my_map
-#   ./macos/run_zod.sh --zig-server         # campaign on the Zig server
-#   ./macos/run_zod.sh --zig-server -m ../Data/Campaing/Z_original/p02_bb_orig01.map -b blue
-#
-# With --zig-server the options go to the server (see 'zod server -h') and
-# the game connects to it as the red team.
+#   ./macos/run_zod.sh                                   # zod play
+#   ./macos/run_zod.sh play -m ../Data/Campaing/Z_original/p02_bb_orig01.map -r 1024x768
+#   ./macos/run_zod.sh edit ~/my.map -n 64x64 -P arctic -N my_map
+#   ./macos/run_zod.sh server -l map_list.txt -b blue
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${ZOD_BUILD_DIR:-$ROOT/zig-out/bin}"
-EXE="zod_engine"
-ZIG_SERVER=0
-if [[ "${1:-}" == "--editor" ]]; then
-  EXE="zod_map_editor"
-  shift
-elif [[ "${1:-}" == "--zig-server" ]]; then
-  ZIG_SERVER=1
-  shift
-fi
-
-if [[ ! -x "$BUILD_DIR/$EXE" ]]; then
-  echo "error: $BUILD_DIR/$EXE not found. Run 'zig build' first." >&2
+ZOD="${ZOD_BUILD_DIR:-$ROOT/zig-out/bin}/zod"
+if [[ ! -x "$ZOD" ]]; then
+  echo "error: $ZOD not found. Run 'zig build' first." >&2
   exit 1
 fi
-
-# The executables switch to bin/ on their own when started elsewhere, but
-# starting from bin/ keeps relative -f/-m/-l paths pointing at the game data.
-cd "$ROOT/bin"
-if [[ $ZIG_SERVER -eq 1 ]]; then
-  [[ $# -eq 0 ]] && set -- -l map_list.txt -b blue
-  "$BUILD_DIR/zod" server "$@" &
-  SERVER=$!
-  trap 'kill $SERVER 2>/dev/null' EXIT
-  sleep 1
-  "$BUILD_DIR/zod_engine" -c localhost -t red -w -r 800x600
-  exit
-fi
-if [[ $# -eq 0 && "$EXE" == "zod_engine" ]]; then
-  set -- -l map_list.txt -t red -b blue -w -r 800x600
-fi
-exec "$BUILD_DIR/$EXE" "$@"
+[[ $# -eq 0 ]] && set -- play
+exec "$ZOD" "$@"

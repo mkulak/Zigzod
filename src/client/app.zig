@@ -218,20 +218,27 @@ pub const App = struct {
     }
 
     pub fn run(app: *App) !void {
-        while (!app.quit) {
-            const now = app.realTime();
-            try app.session.update(now);
-            try app.handleEvents();
-            app.handleSessionEvents() catch |err| return err;
-            app.updateCamera(now - app.last_frame);
-            app.last_frame = now;
-            app.render(now);
-            if (!app.session.connected()) {
-                std.log.err("disconnected from the server", .{});
-                return;
-            }
+        while (try app.frame()) {
             app.io.sleep(.fromMilliseconds(15), .awake) catch return;
         }
+    }
+
+    /// One frame: network, input, drawing. False when the game is over
+    /// (quit, or the server went away).
+    pub fn frame(app: *App) !bool {
+        if (app.quit) return false;
+        const now = app.realTime();
+        try app.session.update(now);
+        try app.handleEvents();
+        try app.handleSessionEvents();
+        app.updateCamera(now - app.last_frame);
+        app.last_frame = now;
+        app.render(now);
+        if (!app.session.connected()) {
+            std.log.err("disconnected from the server", .{});
+            return false;
+        }
+        return !app.quit;
     }
 
     fn handleSessionEvents(app: *App) !void {

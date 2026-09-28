@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Build the SDL 1.2 add-on libraries (SDL_image, SDL_mixer, SDL_ttf) that the
-# Zod Engine needs. Homebrew still ships SDL 1.2 itself (as "sdl12-compat",
+# Build the SDL 1.2 add-on libraries (SDL_image, SDL_mixer) that the Zod
+# engine needs. Homebrew still ships SDL 1.2 itself (as "sdl12-compat",
 # which runs on top of SDL2), but its SDL 1.2 add-on formulae were removed. So
 # this script builds them from the maintained SDL-1.2 branches on GitHub.
 #
@@ -25,7 +25,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "error: Homebrew is required. Install it from https://brew.sh first." >&2
     exit 1
   fi
-  BREW_PKGS=(cmake pkg-config sdl12-compat libpng jpeg-turbo freetype libogg libvorbis mpg123)
+  BREW_PKGS=(pkg-config sdl12-compat libpng jpeg-turbo libogg libvorbis mpg123)
   missing=()
   for p in "${BREW_PKGS[@]}"; do
     brew list --versions "$p" >/dev/null 2>&1 || missing+=("$p")
@@ -61,7 +61,7 @@ EOF
 fi
 
 # --------------------------------------------------------------------------
-# 2. SDL_image / SDL_mixer / SDL_ttf (SDL 1.2 versions)
+# 2. SDL_image / SDL_mixer (SDL 1.2 versions)
 # --------------------------------------------------------------------------
 build_lib() {
   local name="$1"; shift
@@ -96,15 +96,6 @@ build_lib SDL_mixer \
   --enable-music-ogg --disable-music-ogg-shared \
   --enable-music-mp3 --disable-music-mp3-shared \
   --disable-smpegtest
-
-# SDL_ttf's configure looks for GNU libiconv's libiconv_open, which the
-# iconv built into macOS doesn't provide, so its showfont demo fails to link
-# (undefined _iconv_open). Link the system libiconv explicitly.
-TTF_ARGS=()
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  TTF_ARGS+=(LIBS=-liconv)
-fi
-build_lib SDL_ttf ${TTF_ARGS[@]+"${TTF_ARGS[@]}"}
 
 echo
 echo "Dependencies installed into: $PREFIX"

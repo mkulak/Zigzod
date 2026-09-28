@@ -1,4 +1,4 @@
-# CMake / macOS build output
+# build output (deps/: macos/build_deps.sh)
 /build/
 /deps/
 

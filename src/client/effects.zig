@@ -12,7 +12,6 @@ const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const sprites = @import("sprites.zig");
 const Terrain = @import("terrain.zig").Terrain;
-const rotozoom = @import("../sdl_rotozoom.zig");
 const SoundEffect = @import("sound.zig").Effect;
 
 const k = game.constants;
@@ -63,9 +62,7 @@ pub const Transforms = struct {
     }
 
     fn make(img: Image, angle: u16, size: u16) ?Image {
-        const raw: *c.SDL_Surface = rotozoom.rotozoomSurface(img.surface, @floatFromInt(angle), @as(f64, @floatFromInt(size)) / size_steps, 0) orelse return null;
-        defer c.SDL_FreeSurface(raw);
-        return Image.fromSurface(raw);
+        return img.rotozoom(@floatFromInt(angle), @as(f64, @floatFromInt(size)) / size_steps);
     }
 
     /// Call once per drawn frame.

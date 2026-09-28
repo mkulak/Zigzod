@@ -1,8 +1,9 @@
 # Porting Zod to Zig
 
-Goal: an idiomatic Zig implementation of the Zod engine (server, client, bot
-and map editor) that replaces the C++ code in `ZodEgine_Libs/`,
-`zod_engine/` and `zod_map_editor/`.
+An idiomatic Zig implementation of the Zod engine (server, client, bot and
+map editor). It replaced the C++ code (`ZodEgine_Libs/`, `zod_engine/`,
+`zod_map_editor/` and the Qt launcher), which was removed once the Zig
+programs could do everything it did; it is in this repository's history.
 
 ## Approach
 
@@ -18,15 +19,14 @@ interoperable through the network protocol:
 * the Zig code keeps that protocol byte-compatible, so a Zig server can be
   tested with the C++ client and bots, a Zig client against a C++ server,
   and so on;
-* the C++ programs stay buildable until the Zig ones reach parity, then
-  they are deleted.
+* the C++ programs stayed buildable until the Zig ones reached parity, then
+  they were deleted.
 
 Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
 
 ## Layout
 
-    src/main.zig          the `zod` program: `zod server`, `zod client`, `zod bot`,
-                          `zod edit`
+    src/main.zig          the `zod` program: play, server, client, bot, edit
     src/game.zig          game data and rules shared by all programs
       game/constants.zig  enums (teams, unit types, ...) - wire values
       game/settings.zig   unit stats / tunables, also the SET_SETTINGS message
@@ -72,10 +72,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
                           players, maps, "are you sure")
       client/app.zig      window, main loop, camera
 
-    src/root.zig          (transitional) Zig code linked into the C++ programs:
-                          common, ztime, zencrypt_aes, sdl_rotozoom, zfont
-
-`zig build test` runs all Zig unit tests (including a simulated battle and a
+`zig build test` runs all unit tests (including a simulated battle and a
 client talking to a server over a real socket). Tests that read game data
 run from the repository root.
 
@@ -83,22 +80,19 @@ run from the repository root.
 
 1. **Foundations** - constants, settings, map format, protocol, networking. Done.
 2. **Server** - the game simulation (objects, pathfinding, combat, production,
-   zones, votes, commands). Done: `zod server` replaces the C++ dedicated
-   server; the C++ client and C++ bots (`zod_engine -c host -b team`) play on
-   it. The C++ server code is still built because `zod_engine` without `-c`
-   starts one in-process.
-3. **Client** - rendering (SDL/OpenGL), HUD, menus, sound and music.
-   In progress: `zod client` connects, keeps the game in sync, draws the
-   map, all objects with their animations and the effects, has the HUD and
-   minimap, units can be selected and ordered, and production is run from
-   the building windows and the factory list; news, computer messages and
-   votes are shown; the HUD faces talk; sound and music play; the in-game
-   menus change teams, bots, maps, volume, speed and pause. Missing: the
-   end-of-game parade, animals, the crane's construction effect.
+   zones, votes, commands). Done; it was validated with the C++ client and
+   bots playing on it.
+3. **Client** - rendering, HUD, windows, menus, sound and music. Done. Not
+   ported: the animals (birds, hut animals) and the crane's construction
+   effect, which are decoration.
 4. **Bot** and **map editor** - done: `zod bot` joins any server, and
    `zod server -b team` (or the Manage Bots menu) runs bots inside the
    server; `zod edit file.map` edits maps, `-n WxH` makes a new one.
-5. **Remove the C++** and the transitional C-ABI code in `src/root.zig`.
+5. **Remove the C++** - done: `zod` is the only program; `zod play` replaces
+   the single player mode of `zod_engine` (a server with bots and a client
+   in one loop). The transitional C-ABI ports of single C++ files are gone
+   too; the SDL_gfx rotozoomer became `Image.rotozoom` (checked to give the
+   same pixels).
 
 ## Behaviour changes
 
