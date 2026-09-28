@@ -13,6 +13,80 @@ const gfx = @import("gfx.zig");
 
 const Image = gfx.Image;
 const Team = k.Team;
+const Planet = k.Planet;
+const teams = Team.count;
+const planets = Planet.count;
+const dirs = 8;
+
+/// Directions are drawn at these angles (file names use the angle).
+fn angle(dir: usize) usize {
+    return dir * 45;
+}
+
+// ---------------------------------------------------------------------------
+// Art given by path patterns
+// ---------------------------------------------------------------------------
+//
+// Most images are given by a path pattern (relative to the assets folder)
+// whose placeholders number the file names; a field's array dimensions
+// follow its pattern's placeholders, in order:
+//
+//   {team}    the team's name: the art is drawn for red and recolored for
+//             the other teams; neutral gets nothing, or its own file
+//             (`.file`), or the red art (`.red`)
+//   {planet}  the planet's name
+//   {angle}   a direction, as its angle in three digits (000, 045, ...)
+//   {frame}   the index in two digits
+//   {n}       the index
+//
+// so `.walk = "units/robots/walk_{team}_r{angle}_n{frame}.png"` fills
+// walk: [teams][dirs][4]Image. Patterns and dimensions are checked against
+// each other when compiling. Art that doesn't follow one pattern (mirrored
+// directions, pictures put together, gaps) is loaded by code below.
+
+const Dim = enum { team, planet, angle, frame, n };
+const Vars = [@typeInfo(Dim).@"enum".fields.len]usize;
+
+/// The placeholders of `pattern`, in order.
+fn dimsOf(comptime pattern: []const u8) []const Dim {
+    comptime {
+        var out: []const Dim = &.{};
+        var i = 0;
+        while (std.mem.indexOfScalarPos(u8, pattern, i, '{')) |open| {
+            const close = std.mem.indexOfScalarPos(u8, pattern, open, '}') orelse @compileError("unclosed { in " ++ pattern);
+            const d = std.meta.stringToEnum(Dim, pattern[open + 1 .. close]) orelse
+                @compileError("unknown placeholder " ++ pattern[open .. close + 1] ++ " in " ++ pattern);
+            out = out ++ .{d};
+            i = close + 1;
+        }
+        return out;
+    }
+}
+
+/// `pattern` with its placeholders filled in.
+fn expand(buf: []u8, comptime pattern: []const u8, vars: Vars) []const u8 {
+    var w: std.Io.Writer = .fixed(buf);
+    var i: usize = 0;
+    while (i < pattern.len) {
+        if (pattern[i] != '{') {
+            w.writeByte(pattern[i]) catch unreachable;
+            i += 1;
+            continue;
+        }
+        const close = std.mem.indexOfScalarPos(u8, pattern, i, '}').?;
+        const d = std.meta.stringToEnum(Dim, pattern[i + 1 .. close]).?;
+        const v = vars[@intFromEnum(d)];
+        (switch (d) {
+            .team => w.writeAll(@as(Team, @enumFromInt(v)).name()),
+            .planet => w.writeAll(@tagName(@as(Planet, @enumFromInt(v)))),
+            .angle => w.print("{d:0>3}", .{angle(v)}),
+            .frame => w.print("{d:0>2}", .{v}),
+            .n => w.print("{d}", .{v}),
+        }) catch unreachable;
+        i = close + 1;
+    }
+    return w.buffered();
+}
 
 pub const Assets = struct {
     pub const Error = std.mem.Allocator.Error;
@@ -75,18 +149,38 @@ pub const Assets = struct {
     /// An image (`fmt` relative to the assets folder); the placeholder if
     /// it can't be read.
     pub fn image(a: *Assets, comptime fmt: []const u8, args: anytype) Error!Image {
-        return try a.find(fmt, args) orelse {
-            var buf: [512]u8 = undefined;
-            std.log.warn("missing art: {s}", .{a.path(&buf, fmt, args)});
-            a.missing += 1;
-            return a.placeholder;
-        };
+        var buf: [512]u8 = undefined;
+        return a.imageAt(a.path(&buf, fmt, args));
     }
 
     /// An image that may not exist.
     pub fn find(a: *Assets, comptime fmt: []const u8, args: anytype) Error!?Image {
         var buf: [512]u8 = undefined;
-        return Image.load(a.allocator(), a.path(&buf, fmt, args)) catch |err| switch (err) {
+        return a.findAt(a.path(&buf, fmt, args));
+    }
+
+    /// `image` for a path made at run time (relative to the assets folder).
+    pub fn imageNamed(a: *Assets, name: []const u8) Error!Image {
+        var buf: [512]u8 = undefined;
+        return a.imageAt(a.path(&buf, "{s}", .{name}));
+    }
+
+    /// `find` for a path made at run time (relative to the assets folder).
+    pub fn findNamed(a: *Assets, name: []const u8) Error!?Image {
+        var buf: [512]u8 = undefined;
+        return a.findAt(a.path(&buf, "{s}", .{name}));
+    }
+
+    fn imageAt(a: *Assets, full: [:0]const u8) Error!Image {
+        return try a.findAt(full) orelse {
+            std.log.warn("missing art: {s}", .{full});
+            a.missing += 1;
+            return a.placeholder;
+        };
+    }
+
+    fn findAt(a: *Assets, full: [:0]const u8) Error!?Image {
+        return Image.load(a.allocator(), full) catch |err| switch (err) {
             error.ImageUnreadable => null,
             error.OutOfMemory => |e| e,
         };
@@ -116,23 +210,95 @@ pub const Assets = struct {
         red,
     };
 
-    /// One image per team from art drawn for red: `fmt` takes the team
-    /// name first, the other teams are recolored from red.
-    pub fn teams(a: *Assets, comptime fmt: []const u8, args: anytype, neutral: Neutral) Error![Team.count]Image {
-        var out: [Team.count]Image = undefined;
-        const red = try a.image(fmt, .{Team.red.name()} ++ args);
-        for (&out, 0..) |*img, t| {
-            const team: Team = @enumFromInt(t);
-            img.* = switch (team) {
-                .red => red,
-                .none => switch (neutral) {
-                    .nothing => a.nothing,
-                    .file => try a.find(fmt, .{team.name()} ++ args) orelse a.nothing,
-                    .red => red,
-                },
-                else => try a.recolor(team, red),
-            };
+    /// The fields of `dst` named in `paths`: each a pattern, or a pattern
+    /// and what neutral gets (see above).
+    pub fn fill(a: *Assets, dst: anytype, comptime paths: anytype) Error!void {
+        inline for (@typeInfo(@TypeOf(paths)).@"struct".fields) |f| {
+            const entry = @field(paths, f.name);
+            const pattern, const neutral: Neutral = if (@typeInfo(@TypeOf(entry)) == .pointer) .{ entry, .nothing } else entry;
+            @field(dst, f.name) = try a.load(@TypeOf(@field(dst, f.name)), pattern, neutral);
         }
+    }
+
+    /// Images for the array type `T` from `pattern`.
+    pub fn load(a: *Assets, comptime T: type, comptime pattern: []const u8, comptime neutral: Neutral) Error!T {
+        return a.walk(T, pattern, comptime dimsOf(pattern), neutral, @splat(0), false);
+    }
+
+    /// `load` with some placeholders given (e.g. `.{ .planet = p }`):
+    /// those are not dimensions.
+    pub fn loadAt(a: *Assets, comptime T: type, comptime pattern: []const u8, comptime neutral: Neutral, given: anytype) Error!T {
+        const fields = @typeInfo(@TypeOf(given)).@"struct".fields;
+        const dims = comptime blk: {
+            var out: []const Dim = &.{};
+            for (dimsOf(pattern)) |d| {
+                for (fields) |f| {
+                    if (std.mem.eql(u8, f.name, @tagName(d))) break;
+                } else out = out ++ .{d};
+            }
+            break :blk out;
+        };
+        var vars: Vars = @splat(0);
+        inline for (fields) |f| {
+            const v = @field(given, f.name);
+            vars[@intFromEnum(@field(Dim, f.name))] = if (@typeInfo(@TypeOf(v)) == .@"enum") @intFromEnum(v) else v;
+        }
+        return a.walk(T, pattern, dims, neutral, vars, false);
+    }
+
+    fn walk(a: *Assets, comptime T: type, comptime pattern: []const u8, comptime dims: []const Dim, comptime neutral: Neutral, vars: Vars, optional: bool) Error!T {
+        if (T == Image) {
+            if (dims.len != 0) @compileError("more placeholders than dimensions in " ++ pattern);
+            var buf: [256]u8 = undefined;
+            const name = expand(&buf, pattern, vars);
+            return if (optional) try a.findNamed(name) orelse a.nothing else a.imageNamed(name);
+        }
+        const info = @typeInfo(T).array;
+        if (dims.len == 0) @compileError("fewer placeholders than dimensions in " ++ pattern);
+        const d = dims[0];
+        // Art for fewer directions (the first ones) is allowed.
+        const ok = switch (d) {
+            .team => info.len == teams,
+            .planet => info.len == planets,
+            .angle => info.len <= dirs,
+            .frame, .n => true,
+        };
+        if (!ok) @compileError(std.fmt.comptimePrint("{{{t}}} doesn't number {d} images in {s}", .{ d, info.len, pattern }));
+        var out: T = undefined;
+        if (d == .team) {
+            const red = try a.walk(info.child, pattern, dims[1..], neutral, with(vars, .team, @intFromEnum(Team.red)), optional);
+            for (&out, 0..) |*o, t| {
+                const team: Team = @enumFromInt(t);
+                o.* = switch (team) {
+                    .red => red,
+                    .none => switch (neutral) {
+                        .nothing => splat(info.child, a.nothing),
+                        .file => try a.walk(info.child, pattern, dims[1..], neutral, with(vars, .team, t), true),
+                        .red => red,
+                    },
+                    else => try a.recolorAll(info.child, team, red),
+                };
+            }
+        } else {
+            for (&out, 0..) |*o, i| o.* = try a.walk(info.child, pattern, dims[1..], neutral, with(vars, d, i), optional);
+        }
+        return out;
+    }
+
+    fn with(vars: Vars, d: Dim, v: usize) Vars {
+        var out = vars;
+        out[@intFromEnum(d)] = v;
+        return out;
+    }
+
+    fn splat(comptime T: type, img: Image) T {
+        return if (T == Image) img else @splat(splat(@typeInfo(T).array.child, img));
+    }
+
+    fn recolorAll(a: *Assets, comptime T: type, team: Team, red: T) Error!T {
+        if (T == Image) return a.recolor(team, red);
+        var out: T = undefined;
+        for (&out, red) |*o, r| o.* = try a.recolorAll(@typeInfo(T).array.child, team, r);
         return out;
     }
 };
@@ -144,7 +310,7 @@ test "missing art becomes the placeholder" {
     try std.testing.expectEqual(a.placeholder.pixels, img.pixels);
     try std.testing.expectEqual(1, a.missing);
     try std.testing.expect(try a.find("no/such/file.png", .{}) == null);
-    const flags = try a.teams("other/flag_{s}_{d}.png", .{0}, .file);
+    const flags = try a.load([Team.count]Image, "other/flag_{team}_0.png", .file);
     try std.testing.expect(flags[@intFromEnum(Team.blue)].pixels != flags[@intFromEnum(Team.red)].pixels);
     try std.testing.expect(flags[@intFromEnum(Team.none)].pixels != a.nothing.pixels);
 }

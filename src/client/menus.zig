@@ -201,7 +201,7 @@ pub const Art = struct {
             .down = .{ try a.image(art_dir ++ "list/list_button_down_normal.png", .{}), try a.image(art_dir ++ "list/list_button_down_pressed.png", .{}) },
             .scroller = try a.image(art_dir ++ "list/list_scroller.png", .{}),
             .radio = undefined,
-            .swatches = try a.teams(art_dir ++ "team_color_{s}.png", .{}, .file),
+            .swatches = try a.load([k.Team.count]Image, art_dir ++ "team_color_{team}.png", .file),
         };
         for (&art.radio, [_][]const u8{ "left", "center", "right", "selector" }) |*r, name| r.* = try a.image(art_dir ++ "radio/radio_{s}.png", .{name});
         for (&art.buttons, [_][]const u8{ "normal", "pressed", "green" }) |*b, state| {

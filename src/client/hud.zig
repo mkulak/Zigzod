@@ -105,7 +105,7 @@ const Images = struct {
         const dir = "other/hud/";
         var m: Images = .{
             .buttons = undefined,
-            .side = try a.teams(dir ++ "main_hud_side_{s}.png", .{}, .file),
+            .side = try a.load(Teams, dir ++ "main_hud_side_{team}.png", .file),
             .bottom_left = try a.image(dir ++ "main_hud_bottom_left.bmp", .{}),
             .bottom_center = try a.image(dir ++ "main_hud_bottom_center.bmp", .{}),
             .bottom_right = try a.image(dir ++ "main_hud_bottom_right.bmp", .{}),
@@ -113,8 +113,8 @@ const Images = struct {
             .health_full = try a.image(dir ++ "health_full.png", .{}),
             .health_lost = try a.image(dir ++ "health_lost.png", .{}),
             .health_empty = try a.image(dir ++ "health_empty.png", .{}),
-            .unit_amount_bar = try a.teams(dir ++ "unit_amount_bar_{s}.bmp", .{}, .file),
-            .grenade = try a.teams(dir ++ "icon_grenade_{s}.png", .{}, .file),
+            .unit_amount_bar = try a.load(Teams, dir ++ "unit_amount_bar_{team}.bmp", .file),
+            .grenade = try a.load(Teams, dir ++ "icon_grenade_{team}.png", .file),
             .robot_icon = undefined,
             .cannon_icon = undefined,
             .vehicle_icon = undefined,
@@ -129,13 +129,14 @@ const Images = struct {
             }
         }
         inline for (.{ .{ k.Robot, "robot" }, .{ k.Cannon, "cannon" }, .{ k.Vehicle, "vehicle" } }) |kind| {
-            for (0..kind[0].count) |i| {
-                const name = @tagName(@as(kind[0], @enumFromInt(i)));
-                @field(m, kind[1] ++ "_icon")[i] = try a.teams(dir ++ "icon_{[1]s}_{[0]s}.png", .{name}, .file);
-                @field(m, kind[1] ++ "_label")[i] = try a.image(dir ++ "label_{s}.png", .{name});
+            inline for (@typeInfo(kind[0]).@"enum".fields) |f| {
+                @field(m, kind[1] ++ "_icon")[f.value] = try a.load(Teams, dir ++ "icon_" ++ f.name ++ "_{team}.png", .file);
+                @field(m, kind[1] ++ "_label")[f.value] = try a.image(dir ++ "label_" ++ f.name ++ ".png", .{});
             }
         }
-        for (&m.unit_label, 0..) |*l, i| l.* = try a.teams(dir ++ "unit_label_{[1]s}_{[0]s}.png", .{@tagName(@as(k.Robot, @enumFromInt(i)))}, .file);
+        inline for (@typeInfo(k.Robot).@"enum".fields) |f| {
+            m.unit_label[f.value] = try a.load(Teams, dir ++ "unit_label_" ++ f.name ++ "_{team}.png", .file);
+        }
         return m;
     }
 };

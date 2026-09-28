@@ -139,7 +139,7 @@ pub const Faces = struct {
     pub fn load(a: *Assets) Assets.Error!Faces {
         var m: Faces = undefined;
         m.backdrop_vehicle = try a.image("other/hud/backdrop_vehicle.bmp", .{});
-        for (&m.backdrop, 0..) |*b, p| b.* = try a.image("other/hud/backdrop_{s}.bmp", .{@tagName(@as(k.Planet, @enumFromInt(p)))});
+        m.backdrop = try a.load(@TypeOf(m.backdrop), "other/hud/backdrop_{planet}.bmp", .nothing);
         for (&m.faces, 0..) |*per_team, r| {
             const robot: k.Robot = @enumFromInt(r);
             // Drawn for red, recolored for the teams without their own art.

@@ -60,17 +60,12 @@ pub const Cursors = struct {
 
     pub fn load(a: *Assets) Assets.Error!Cursors {
         var c: Cursors = undefined;
-        for (0..Kind.count) |ki| {
-            const kind: Kind = @enumFromInt(ki);
-            for (0..frames) |f| {
-                if (kind.neutral()) {
-                    const img = try a.image("cursors/{s}_n{d:0>2}.png", .{ @tagName(kind), f });
-                    for (&c.images[ki]) |*team| team[f] = img;
-                    continue;
-                }
-                // Drawn for red, recolored for the others.
-                const v = try a.teams("cursors/{[1]s}_{[0]s}_n{[2]d:0>2}.png", .{ @tagName(kind), f }, .file);
-                for (0..k.Team.count) |t| c.images[ki][t][f] = v[t];
+        inline for (@typeInfo(Kind).@"enum".fields) |field| {
+            const images = &c.images[field.value];
+            if (comptime @as(Kind, @enumFromInt(field.value)).neutral()) {
+                images.* = @splat(try a.load([frames]Image, "cursors/" ++ field.name ++ "_n{frame}.png", .nothing));
+            } else {
+                images.* = try a.load([k.Team.count][frames]Image, "cursors/" ++ field.name ++ "_{team}_n{frame}.png", .file);
             }
         }
         // Without a team the order cursors show their markers (only the

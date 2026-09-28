@@ -49,10 +49,10 @@ pub const Sheets = struct {
     pub fn load(a: *Assets) Assets.Error!Sheets {
         var s: Sheets = .{
             .planets = undefined,
-            .zone_marker = try a.teams("planets/zone_marker_{s}.png", .{}, .file),
-            .zone_marker_water = try a.teams("planets/zone_marker_water_{s}.png", .{}, .file),
+            .zone_marker = try a.load([k.Team.count]Image, "planets/zone_marker_{team}.png", .file),
+            .zone_marker_water = try a.load([k.Team.count]Image, "planets/zone_marker_water_{team}.png", .file),
         };
-        for (&s.planets, 0..) |*p, i| p.* = try a.image("planets/{s}.bmp", .{@tagName(@as(k.Planet, @enumFromInt(i)))});
+        s.planets = try a.load(@TypeOf(s.planets), "planets/{planet}.bmp", .nothing);
         for (&s.craters, 0..) |*planet, p| {
             const types: usize = switch (@as(k.Planet, @enumFromInt(p))) {
                 .desert => 7,

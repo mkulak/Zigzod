@@ -20,87 +20,16 @@ const dirs = 8;
 
 pub const map_objects = k.Item.count - 5;
 
-/// Directions are drawn at these angles (file names use the angle).
-fn angle(dir: usize) usize {
-    return dir * 45;
+/// Per planet, per team versions of a building: the planet's base with
+/// the team's color plate on it (none for neutral).
+fn teamBases(a: *Assets, base: [planets]Image, plates: [teams]Image, x: i32, y: i32) Error![planets][teams]Image {
+    var out: [planets][teams]Image = undefined;
+    for (0..planets) |p| {
+        out[p][0] = base[p];
+        for (1..teams) |t| out[p][t] = try a.composite(base[p], plates[t], x, y);
+    }
+    return out;
 }
-
-/// Loading helpers for the tables below.
-const Loader = struct {
-    a: *Assets,
-
-    /// One image, `fmt` relative to the assets folder.
-    fn one(l: Loader, comptime fmt: []const u8, args: anytype) Error!Image {
-        return l.a.image(fmt, args);
-    }
-
-    /// `n` images; the index is the last format argument.
-    fn seq(l: Loader, comptime n: usize, comptime fmt: []const u8, args: anytype) Error![n]Image {
-        var out: [n]Image = undefined;
-        for (&out, 0..) |*img, i| img.* = try l.one(fmt, args ++ .{i});
-        return out;
-    }
-
-    /// Per planet (the planet name is the last format argument).
-    fn perPlanet(l: Loader, comptime fmt: []const u8) Error![planets]Image {
-        var out: [planets]Image = undefined;
-        for (&out, 0..) |*img, i| img.* = try l.one(fmt, .{@tagName(@as(Planet, @enumFromInt(i)))});
-        return out;
-    }
-
-    /// One image per team (see Assets.teams).
-    fn teamsOf(l: Loader, comptime fmt: []const u8, args: anytype, neutral: Assets.Neutral) Error![teams]Image {
-        return l.a.teams(fmt, args, neutral);
-    }
-
-    /// [teams][n] frames (the frame index is the last format argument).
-    fn teamFrames(l: Loader, comptime n: usize, comptime fmt: []const u8, args: anytype, neutral: Assets.Neutral) Error![teams][n]Image {
-        var out: [teams][n]Image = undefined;
-        for (0..n) |i| {
-            const v = try l.teamsOf(fmt, args ++ .{i}, neutral);
-            for (0..teams) |t| out[t][i] = v[t];
-        }
-        return out;
-    }
-
-    /// [teams][direction] (the angle is the last format argument).
-    fn teamDirs(l: Loader, comptime fmt: []const u8) Error![teams][dirs]Image {
-        var out: [teams][dirs]Image = undefined;
-        for (0..dirs) |d| {
-            const v = try l.teamsOf(fmt, .{angle(d)}, .nothing);
-            for (0..teams) |t| out[t][d] = v[t];
-        }
-        return out;
-    }
-
-    /// [teams][direction][frame] (angle, then frame, last).
-    fn teamDirFrames(l: Loader, comptime n: usize, comptime fmt: []const u8) Error![teams][dirs][n]Image {
-        var out: [teams][dirs][n]Image = undefined;
-        for (0..dirs) |d| for (0..n) |i| {
-            const v = try l.teamsOf(fmt, .{ angle(d), i }, .nothing);
-            for (0..teams) |t| out[t][d][i] = v[t];
-        };
-        return out;
-    }
-
-    /// Per direction, no team colors.
-    fn dirImages(l: Loader, comptime fmt: []const u8) Error![dirs]Image {
-        var out: [dirs]Image = undefined;
-        for (&out, 0..) |*img, d| img.* = try l.one(fmt, .{angle(d)});
-        return out;
-    }
-
-    /// Per planet, per team versions of a building: the planet's base with
-    /// the team's color plate on it (none for neutral).
-    fn teamBases(l: Loader, base: [planets]Image, plates: [teams]Image, x: i32, y: i32) Error![planets][teams]Image {
-        var out: [planets][teams]Image = undefined;
-        for (0..planets) |p| {
-            out[p][0] = base[p];
-            for (1..teams) |t| out[p][t] = try l.a.composite(base[p], plates[t], x, y);
-        }
-        return out;
-    }
-};
 
 // ---------------------------------------------------------------------------
 // Buildings
@@ -290,145 +219,100 @@ pub const Sprites = struct {
     /// Load everything (kept in the assets' arena).
     pub fn load(a: *Assets) Error!*Sprites {
         const s = try a.allocator().create(Sprites);
-        const none = a.nothing;
-        s.* = .{
-            .flag = undefined,
-            .grenades = undefined,
-            .rockets = undefined,
-            .map_object = undefined,
-            .hut = undefined,
-            .rocks = undefined,
-            .level = undefined,
-            .exhaust = undefined,
-            .little_exhaust = undefined,
-            .fort = undefined,
-            .radar = undefined,
-            .robot_factory = undefined,
-            .vehicle_factory = undefined,
-            .repair = undefined,
-            .bridge = undefined,
-            .init_place = undefined,
-            .cannon = undefined,
-            .vehicle = @splat(.{
-                .base = @splat(@splat(@splat(none))),
-                .damaged = @splat(@splat(@splat(none))),
-                .top = @splat(@splat(none)),
-                .wasted = @splat(none),
-            }),
-            .jeep = undefined,
-            .crane = undefined,
-            .robot = undefined,
-            .fx = undefined,
-        };
-        const l: Loader = .{ .a = a };
-        try s.loadItems(l);
-        try s.loadBuildings(l);
-        try s.loadCannons(l);
-        try s.loadVehicles(l);
-        try s.loadRobots(l);
-        try s.loadEffects(l);
+        try a.fill(s, item_art);
+        try s.loadBuildings(a);
+        try s.loadCannons(a);
+        try s.loadVehicles(a);
+        try s.loadRobots(a);
+        try s.loadEffects(a);
         return s;
     }
 
-    fn loadItems(s: *Sprites, l: Loader) Error!void {
-        s.flag = try l.teamFrames(4, "other/flag_{s}_{d}.png", .{}, .file);
-        s.grenades = try l.one("other/map_items/grenades.png", .{});
-        s.rockets = try l.one("other/map_items/rockets.png", .{});
-        s.map_object = try l.seq(map_objects, "other/map_items/map_object{d}.png", .{});
-        s.hut = try l.perPlanet("other/map_items/hut_{s}.png");
-        s.rocks = try l.perPlanet("planets/rocks_{s}.png");
-    }
-
-    fn loadBuildings(s: *Sprites, l: Loader) Error!void {
+    fn loadBuildings(s: *Sprites, a: *Assets) Error!void {
+        try a.fill(s, building_art);
         // (level_N counts from 1)
-        for (&s.level, 0..) |*lv, i| lv.* = try l.one("buildings/level_{d}.bmp", .{i + 1});
-        s.exhaust = try l.seq(13, "buildings/exhaust_{d}.png", .{});
-        s.little_exhaust = try l.seq(4, "buildings/little_exhaust_{d}.png", .{});
+        for (&s.level, 0..) |*lv, i| lv.* = try a.image("buildings/level_{d}.bmp", .{i + 1});
 
-        const overlay = try l.one("buildings/fort/destroyed_overlay.png", .{});
-        s.fort = .{
-            .front = try l.perPlanet("buildings/fort/fort_{s}_front.png"),
-            .back = try l.perPlanet("buildings/fort/fort_{s}_back.png"),
-            .front_destroyed = try l.perPlanet("buildings/fort/fort_{s}_front_destroyed.png"),
-            .back_destroyed = try l.perPlanet("buildings/fort/fort_{s}_back_destroyed.png"),
-            .front_destroyed_overlay = undefined,
-            .back_destroyed_overlay = undefined,
-            .flag = try l.teamFrames(4, "buildings/fort/flag_{s}_n{d:0>2}.png", .{}, .file),
-        };
+        try a.fill(&s.fort, fort_art);
+        const overlay = try a.image("buildings/fort/destroyed_overlay.png", .{});
         for (0..planets) |p| {
-            s.fort.front_destroyed_overlay[p] = try l.a.composite(s.fort.front_destroyed[p], overlay, 0, 0);
-            s.fort.back_destroyed_overlay[p] = try l.a.composite(s.fort.back_destroyed[p], overlay, 0, 0);
+            s.fort.front_destroyed_overlay[p] = try a.composite(s.fort.front_destroyed[p], overlay, 0, 0);
+            s.fort.back_destroyed_overlay[p] = try a.composite(s.fort.back_destroyed[p], overlay, 0, 0);
         }
 
-        s.radar = .{
-            .base = try l.teamBases(try l.perPlanet("buildings/radar/base_{s}.png"), try l.teamsOf("buildings/radar/{s}.png", .{}, .nothing), 0, 32),
-            .destroyed = try l.perPlanet("buildings/radar/base_destroyed_{s}.png"),
-            .box_spinner = try l.seq(12, "buildings/radar/box_spinner_{d}.png", .{}),
-            .dish = try l.seq(8, "buildings/radar/dish_{d}.png", .{}),
-            .front_light = try l.seq(2, "buildings/radar/front_light_{d}.png", .{}),
-            .side_light = try l.seq(2, "buildings/radar/side_light_{d}.png", .{}),
-        };
-        s.robot_factory = .{
-            .base = try l.teamBases(try l.perPlanet("buildings/robot/base_{s}.png"), try l.teamsOf("buildings/robot/{s}.png", .{}, .nothing), 16, 64),
-            .destroyed = try l.teamBases(try l.perPlanet("buildings/robot/base_destroyed_{s}.png"), try l.teamsOf("buildings/robot/{s}_destroyed.png", .{}, .nothing), 16, 64),
-            .spin = try l.seq(8, "buildings/robot/spin_{d}.png", .{}),
-            .green_box = try l.seq(6, "buildings/robot/green_box_{d}.png", .{}),
-            .robot = try l.seq(2, "buildings/robot/robot_{d}.png", .{}),
-            .light = try l.seq(2, "buildings/robot/light_{d}.png", .{}),
-            .double_light = try l.seq(2, "buildings/robot/double_light_{d}.png", .{}),
-        };
-        s.vehicle_factory = .{
-            .base = try l.teamBases(try l.perPlanet("buildings/vehicle/base_{s}.png"), try l.teamsOf("buildings/vehicle/{s}.png", .{}, .nothing), 32, 48),
-            .destroyed = try l.teamBases(try l.perPlanet("buildings/vehicle/base_destroyed_{s}.png"), try l.teamsOf("buildings/vehicle/{s}_destroyed.png", .{}, .nothing), 32, 48),
-            .spin = try l.seq(8, "buildings/vehicle/spin_{d}.png", .{}),
-            .vent = try l.seq(4, "buildings/vehicle/vent_{d}.png", .{}),
-            .lights = try l.seq(2, "buildings/vehicle/lights_{d}.png", .{}),
-            .tank = try l.seq(2, "buildings/vehicle/tank_{d}.png", .{}),
-            .bulb = try l.seq(2, "buildings/vehicle/bulb_{d}.png", .{}),
-        };
-        s.repair = .{
-            .base = try l.teamBases(try l.perPlanet("buildings/repair/base_{s}.png"), try l.teamsOf("buildings/repair/{s}.png", .{}, .nothing), 0, 48),
-            .destroyed = try l.perPlanet("buildings/repair/base_destroyed_{s}.png"),
-            .smoke_stack = try l.seq(5, "buildings/repair/smoke_stack_{d}.png", .{}),
-            .text_box = try l.seq(3, "buildings/repair/text_box_{d}.png", .{}),
-            .bulb = try l.seq(2, "buildings/repair/bulb_{d}.png", .{}),
-            .side_light = try l.seq(2, "buildings/repair/side_light_{d}.png", .{}),
-            .front_light = try l.seq(2, "buildings/repair/front_light_{d}.png", .{}),
-        };
-        s.bridge = try l.perPlanet("planets/bridge_{s}.png");
+        // Team colored buildings: the team's plate put on the planet's base.
+        try a.fill(&s.radar, radar_art);
+        s.radar.base = try teamBases(
+            a,
+            try a.load([planets]Image, "buildings/radar/base_{planet}.png", .nothing),
+            try a.load([teams]Image, "buildings/radar/{team}.png", .nothing),
+            0,
+            32,
+        );
+        try a.fill(&s.robot_factory, robot_factory_art);
+        inline for (.{ .{ "base", "" }, .{ "destroyed", "_destroyed" } }) |part| {
+            @field(s.robot_factory, part[0]) = try teamBases(
+                a,
+                try a.load([planets]Image, "buildings/robot/base" ++ part[1] ++ "_{planet}.png", .nothing),
+                try a.load([teams]Image, "buildings/robot/{team}" ++ part[1] ++ ".png", .nothing),
+                16,
+                64,
+            );
+        }
+        try a.fill(&s.vehicle_factory, vehicle_factory_art);
+        inline for (.{ .{ "base", "" }, .{ "destroyed", "_destroyed" } }) |part| {
+            @field(s.vehicle_factory, part[0]) = try teamBases(
+                a,
+                try a.load([planets]Image, "buildings/vehicle/base" ++ part[1] ++ "_{planet}.png", .nothing),
+                try a.load([teams]Image, "buildings/vehicle/{team}" ++ part[1] ++ ".png", .nothing),
+                32,
+                48,
+            );
+        }
+        try a.fill(&s.repair, repair_art);
+        s.repair.base = try teamBases(
+            a,
+            try a.load([planets]Image, "buildings/repair/base_{planet}.png", .nothing),
+            try a.load([teams]Image, "buildings/repair/{team}.png", .nothing),
+            0,
+            48,
+        );
     }
 
-    fn loadCannons(s: *Sprites, l: Loader) Error!void {
-        s.init_place = try l.seq(3, "units/cannons/init-place_n{d:0>2}.png", .{});
-        try s.loadCannon(l, .gatling, "gatling");
-        try s.loadCannon(l, .howitzer, "howitzer");
-        try s.loadCannon(l, .gun, "gun");
-        try s.loadCannon(l, .missile_cannon, "missile_cannon");
+    fn loadCannons(s: *Sprites, a: *Assets) Error!void {
+        s.init_place = try a.load([3]Image, "units/cannons/init-place_n{frame}.png", .nothing);
+        try s.loadCannon(a, .gatling, "gatling");
+        try s.loadCannon(a, .howitzer, "howitzer");
+        try s.loadCannon(a, .gun, "gun");
+        try s.loadCannon(a, .missile_cannon, "missile_cannon");
     }
 
-    fn loadCannon(s: *Sprites, l: Loader, comptime kind: k.Cannon, comptime name: []const u8) Error!void {
+    fn loadCannon(s: *Sprites, a: *Assets, comptime kind: k.Cannon, comptime name: []const u8) Error!void {
         const cs = &s.cannon[@intFromEnum(kind)];
         const base = "units/cannons/" ++ name ++ "/";
         // The unmanned cannon.
         switch (kind) {
-            .gatling, .howitzer => cs.passive[0] = try l.dirImages(base ++ "empty_r{d:0>3}.png"),
-            .gun => cs.passive[0] = @splat(try l.one(base ++ "empty.png", .{})),
-            .missile_cannon => cs.passive[0] = @splat(try l.one(base ++ "empty_null.png", .{})),
+            .gatling, .howitzer => cs.passive[0] = try a.load([dirs]Image, base ++ "empty_r{angle}.png", .nothing),
+            .gun => cs.passive[0] = @splat(try a.image(base ++ "empty.png", .{})),
+            .missile_cannon => cs.passive[0] = @splat(try a.image(base ++ "empty_null.png", .{})),
         }
-        cs.wasted = if (kind == .missile_cannon) try l.teamsOf(base ++ "wasted_{s}.png", .{}, .nothing) else @splat(try l.one(base ++ "wasted.png", .{}));
-        cs.place = try l.teamFrames(4, base ++ "place_{s}_n{d:0>2}.png", .{}, .nothing);
+        cs.wasted = if (kind == .missile_cannon)
+            try a.load([teams]Image, base ++ "wasted_{team}.png", .nothing)
+        else
+            @splat(try a.image(base ++ "wasted.png", .{}));
+        cs.place = try a.load([teams][4]Image, base ++ "place_{team}_n{frame}.png", .nothing);
         cs.place[0] = @splat(cs.passive[0][4]);
         switch (kind) {
             // Two frames: at rest and firing.
-            .gatling, .howitzer => for (0..dirs) |d| {
-                const f = try l.teamFrames(2, base ++ "fire_{s}_r{d:0>3}_n{d:0>2}.png", .{angle(d)}, .nothing);
-                for (1..teams) |t| {
-                    cs.passive[t][d] = f[t][0];
-                    cs.fire[t][d] = f[t][1];
-                }
+            .gatling, .howitzer => {
+                const f = try a.load([teams][dirs][2]Image, base ++ "fire_{team}_r{angle}_n{frame}.png", .nothing);
+                for (1..teams) |t| for (0..dirs) |d| {
+                    cs.passive[t][d] = f[t][d][0];
+                    cs.fire[t][d] = f[t][d][1];
+                };
             },
             .gun, .missile_cannon => {
-                const f = try l.teamDirs(base ++ "equiped_{s}_r{d:0>3}.png");
+                const f = try a.load([teams][dirs]Image, base ++ "equiped_{team}_r{angle}.png", .nothing);
                 for (1..teams) |t| {
                     cs.passive[t] = f[t];
                     cs.fire[t] = f[t];
@@ -438,19 +322,26 @@ pub const Sprites = struct {
         cs.fire[0] = cs.passive[0];
     }
 
-    fn loadVehicles(s: *Sprites, l: Loader) Error!void {
+    fn loadVehicles(s: *Sprites, a: *Assets) Error!void {
+        const none = a.nothing;
+        s.vehicle = @splat(.{
+            .base = @splat(@splat(@splat(none))),
+            .damaged = @splat(@splat(@splat(none))),
+            .top = @splat(@splat(none)),
+            .wasted = @splat(none),
+        });
         // Light, medium and heavy tanks: art for four directions, the
         // opposite ones use the same pictures with the tracks reversed.
         inline for (.{ .{ k.Vehicle.light, "light", "empty.png" }, .{ k.Vehicle.medium, "medium", "empty_null.png" }, .{ k.Vehicle.heavy, "heavy", "empty.png" } }) |v| {
             const vs = &s.vehicle[@intFromEnum(v[0])];
             const base = "units/vehicles/" ++ v[1] ++ "/";
-            const empty = try l.one(base ++ v[2], .{});
+            const empty = try a.image(base ++ v[2], .{});
             vs.base[0] = @splat(@splat(empty));
             vs.damaged[0] = @splat(@splat(empty));
             for ([_]usize{ 0, 1, 2, 7 }) |d| {
                 const opposite = if (d == 7) 3 else d + 4;
-                const frames = try l.teamFrames(3, base ++ "base_{s}_r{d:0>3}_n{d:0>2}.png", .{angle(d)}, .nothing);
-                const damaged = try l.teamFrames(3, base ++ "base_damaged_{s}_r{d:0>3}_n{d:0>2}.png", .{angle(d)}, .nothing);
+                const frames = try a.loadAt([teams][3]Image, base ++ "base_{team}_r{angle}_n{frame}.png", .nothing, .{ .angle = d });
+                const damaged = try a.loadAt([teams][3]Image, base ++ "base_damaged_{team}_r{angle}_n{frame}.png", .nothing, .{ .angle = d });
                 for (1..teams) |t| for (0..3) |f| {
                     vs.base[t][d][f] = frames[t][f];
                     vs.base[t][opposite][2 - f] = frames[t][f];
@@ -459,64 +350,54 @@ pub const Sprites = struct {
                 };
             }
             switch (v[0]) {
-                .light => vs.top = @splat(try l.dirImages(base ++ "top_r{d:0>3}.png")),
-                .medium => vs.top = @splat(try l.dirImages(base ++ "topf_r{d:0>3}.png")),
-                else => vs.top = try l.teamDirs(base ++ "top_{s}_r{d:0>3}.png"),
+                .light => vs.top = @splat(try a.load([dirs]Image, base ++ "top_r{angle}.png", .nothing)),
+                .medium => vs.top = @splat(try a.load([dirs]Image, base ++ "topf_r{angle}.png", .nothing)),
+                else => vs.top = try a.load([teams][dirs]Image, base ++ "top_{team}_r{angle}.png", .nothing),
             }
         }
         {
             const vs = &s.vehicle[@intFromEnum(k.Vehicle.jeep)];
-            vs.wasted = @splat(try l.one("units/vehicles/jeep/wasted.png", .{}));
-            for (0..dirs) |d| vs.base[0][d] = @splat(try l.one("units/vehicles/jeep/empty_r{d:0>3}.png", .{angle(d)}));
-            const frames = try l.teamDirFrames(2, "units/vehicles/jeep/base_{s}_r{d:0>3}_n{d:0>2}.png");
+            vs.wasted = @splat(try a.image("units/vehicles/jeep/wasted.png", .{}));
+            const empty = try a.load([dirs]Image, "units/vehicles/jeep/empty_r{angle}.png", .nothing);
+            for (&vs.base[0], empty) |*b, e| b.* = @splat(e);
+            const frames = try a.load([teams][dirs][2]Image, "units/vehicles/jeep/base_{team}_r{angle}_n{frame}.png", .nothing);
             for (1..teams) |t| for (0..dirs) |d| {
                 vs.base[t][d][0] = frames[t][d][0];
                 vs.base[t][d][1] = frames[t][d][1];
             };
-            for (0..dirs) |d| {
-                s.jeep.under[d] = if (d == 2 or d == 6) @splat(l.a.nothing) else try l.seq(4, "units/vehicles/jeep/under_r{d:0>3}_n{d:0>2}.png", .{angle(d)});
-                s.jeep.gun[d] = try l.one("units/vehicles/jeep/fire_r{d:0>3}_n00.png", .{angle(d)});
-                s.jeep.gun_fire[d] = try l.one("units/vehicles/jeep/fire_r{d:0>3}_n01.png", .{angle(d)});
-            }
+            try a.fill(&s.jeep, jeep_art);
+            // No wheels show driving up or down.
+            for (&s.jeep.under, 0..) |*u, d| u.* = if (d == 2 or d == 6)
+                @splat(none)
+            else
+                try a.loadAt([4]Image, "units/vehicles/jeep/under_r{angle}_n{frame}.png", .nothing, .{ .angle = d });
         }
         inline for (.{ .{ k.Vehicle.apc, "apc", "empty.png" }, .{ k.Vehicle.missile_launcher, "missile_launcher", "empty_null.png" }, .{ k.Vehicle.crane, "crane", "empty_null.png" } }) |v| {
             const vs = &s.vehicle[@intFromEnum(v[0])];
             const base = "units/vehicles/" ++ v[1] ++ "/";
-            vs.base[0] = @splat(@splat(try l.one(base ++ v[2], .{})));
-            const frames = try l.teamDirFrames(3, base ++ "base_{s}_r{d:0>3}_n{d:0>2}.png");
+            vs.base[0] = @splat(@splat(try a.image(base ++ v[2], .{})));
+            const frames = try a.load([teams][dirs][3]Image, base ++ "base_{team}_r{angle}_n{frame}.png", .nothing);
             for (1..teams) |t| vs.base[t] = frames[t];
-            vs.wasted = try l.teamsOf(base ++ "wasted_{s}.png", .{}, if (v[0] == .crane) .file else .nothing);
-            if (v[0] != .crane) vs.wasted[0] = vs.wasted[@intFromEnum(Team.red)];
+            vs.wasted = try a.load([teams]Image, base ++ "wasted_{team}.png", if (v[0] == .crane) .file else .red);
         }
-        s.vehicle[@intFromEnum(k.Vehicle.apc)].top = @splat(try l.dirImages("units/vehicles/apc/top_r{d:0>3}.png"));
-        s.vehicle[@intFromEnum(k.Vehicle.missile_launcher)].top = try l.teamDirs("units/vehicles/missile_launcher/top_{s}_r{d:0>3}.png");
+        s.vehicle[@intFromEnum(k.Vehicle.apc)].top = @splat(try a.load([dirs]Image, "units/vehicles/apc/top_r{angle}.png", .nothing));
+        s.vehicle[@intFromEnum(k.Vehicle.missile_launcher)].top = try a.load([teams][dirs]Image, "units/vehicles/missile_launcher/top_{team}_r{angle}.png", .nothing);
         // The crane's arm is drawn facing away.
-        for (0..dirs) |d| s.crane.arm[d] = try l.one("units/vehicles/crane/crane_r{d:0>3}.png", .{angle((d + 4) % dirs)});
-        for (0..8) |i| {
-            s.crane.hook[i] = try l.one("units/vehicles/crane/hook_n{d:0>2}.png", .{i});
-            s.crane.hook[15 - i] = s.crane.hook[i];
+        const arm = try a.load([dirs]Image, "units/vehicles/crane/crane_r{angle}.png", .nothing);
+        for (&s.crane.arm, 0..) |*arm_d, d| arm_d.* = arm[(d + 4) % dirs];
+        // The hook goes down and back up.
+        const hook = try a.load([8]Image, "units/vehicles/crane/hook_n{frame}.png", .nothing);
+        for (hook, 0..) |h, i| {
+            s.crane.hook[i] = h;
+            s.crane.hook[15 - i] = h;
         }
     }
 
-    fn loadEffects(s: *Sprites, l: Loader) Error!void {
-        try loadEffectsImpl(s, l);
-    }
-
-    fn loadRobots(s: *Sprites, l: Loader) Error!void {
+    fn loadRobots(s: *Sprites, a: *Assets) Error!void {
         const r = &s.robot;
-        const dir = "units/robots/";
-        r.null_img = try l.one(dir ++ "null.png", .{});
-        r.stand = try l.teamDirs(dir ++ "stand_{s}_r{d:0>3}.png");
+        try a.fill(r, robot_art);
         r.stand[0] = @splat(r.null_img);
-        r.walk = try l.teamDirFrames(4, dir ++ "walk_{s}_r{d:0>3}_n{d:0>2}.png");
-        r.throw = try l.teamDirFrames(4, dir ++ "throw_{s}_r{d:0>3}_n{d:0>2}.png");
-        r.beer = try l.teamFrames(10, dir ++ "beer_{s}_n{d:0>2}.png", .{}, .nothing);
-        r.cigarette = try l.teamFrames(11, dir ++ "cigarette_{s}_n{d:0>2}.png", .{}, .nothing);
-        r.full_area_scan = try l.teamFrames(12, dir ++ "full_area_scan_{s}_n{d:0>2}.png", .{}, .nothing);
-        r.head_stretch = try l.teamFrames(11, dir ++ "head_stretch_{s}_n{d:0>2}.png", .{}, .nothing);
-        r.pickup_up = try l.teamFrames(4, dir ++ "pickup-up_{s}_n{d:0>2}.png", .{}, .nothing);
-        r.pickup_down = try l.teamFrames(4, dir ++ "pickup-down_{s}_n{d:0>2}.png", .{}, .nothing);
-        r.fire = @splat(@splat(@splat(@splat(l.a.nothing))));
+        r.fire = @splat(@splat(@splat(@splat(a.nothing))));
         inline for (.{
             .{ k.Robot.grunt, "grunt", 5 },
             .{ k.Robot.psycho, "psycho", 2 },
@@ -525,108 +406,186 @@ pub const Sprites = struct {
             .{ k.Robot.pyro, "pyro", 3 },
             .{ k.Robot.laser, "laser", 3 },
         }) |e| {
-            const f = try l.teamDirFrames(e[2], dir ++ e[1] ++ "/fire_{s}_r{d:0>3}_n{d:0>2}.png");
-            for (0..teams) |t| for (0..dirs) |d| for (0..e[2]) |i| {
-                r.fire[@intFromEnum(e[0])][t][d][i] = f[t][d][i];
+            const f = try a.load([teams][dirs][e[2]]Image, "units/robots/" ++ e[1] ++ "/fire_{team}_r{angle}_n{frame}.png", .nothing);
+            for (0..teams) |t| for (0..dirs) |d| {
+                r.fire[@intFromEnum(e[0])][t][d][0..e[2]].* = f[t][d];
             };
         }
-        r.tank_robot = try l.teamDirFrames(2, dir ++ "tank_fire_{s}_r{d:0>3}_n{d:0>2}.png");
-        r.tank_robot[0] = r.tank_robot[@intFromEnum(Team.red)];
-        for (0..dirs) |d| r.tank_lid[d] = try l.seq(3, "units/vehicles/tank_lid_r{d:0>3}_n{d:0>2}.png", .{angle(d)});
+    }
+
+    fn loadEffects(s: *Sprites, a: *Assets) Error!void {
+        const f = &s.fx;
+        const none = a.nothing;
+        try a.fill(f, effect_art);
+        // Pyro fires: 5 kinds with 4, 4, 4, 6, 6 frames.
+        f.pyro_fire = @splat(@splat(none));
+        inline for (0..5, .{ 4, 4, 4, 6, 6 }) |i, n| {
+            f.pyro_fire[i][0..n].* = try a.load([n]Image, std.fmt.comptimePrint("other/fire/fire{d}", .{i}) ++ "_n{frame}.png", .nothing);
+        }
+        // The dying robots: 10, 10, 10 and 8 frames.
+        f.robot_die = @splat(@splat(@splat(none)));
+        inline for (0..4, .{ 10, 10, 10, 8 }) |d, n| {
+            const frames = try a.load([teams][n]Image, std.fmt.comptimePrint("units/robots/die{d}", .{d + 1}) ++ "_{team}_n{frame}.png", .nothing);
+            for (0..teams) |t| f.robot_die[d][t][0..n].* = frames[t];
+        }
+        f.cannon_wasted = .{
+            s.cannon[@intFromEnum(k.Cannon.gatling)].wasted[0],
+            s.cannon[@intFromEnum(k.Cannon.gun)].wasted[0],
+            s.cannon[@intFromEnum(k.Cannon.howitzer)].wasted[0],
+            try a.image("units/cannons/missile_cannon/wasted.png", .{}),
+        };
+        f.jeep_wasted = s.vehicle[@intFromEnum(k.Vehicle.jeep)].wasted[0];
+        f.rock_large[0] = try a.load([planets][12]Image, "planets/rock_effects/debri_large0_{planet}_n{frame}.png", .nothing);
+
+        // Planets differ in what debris, tracks and dirt they have.
+        for (0..planets) |p| {
+            const planet: Planet = @enumFromInt(p);
+            f.rock_large[1][p] = switch (planet) {
+                .desert, .city => @splat(none),
+                else => try a.loadAt([12]Image, "planets/rock_effects/debri_large1_{planet}_n{frame}.png", .nothing, .{ .planet = planet }),
+            };
+            // Tracks: none in the city, jeeps only in the desert; art for
+            // four directions, the opposite ones look the same.
+            f.track[0][p] = @splat(@splat(none));
+            f.track[1][p] = @splat(@splat(none));
+            if (planet != .city) {
+                const tank = try a.loadAt([4][3]Image, "units/vehicles/track_effects/tank_track_{planet}_r{angle}_n{frame}.png", .nothing, .{ .planet = planet });
+                f.track[0][p] = tank ++ tank;
+            }
+            if (planet == .desert) {
+                const jeep = try a.loadAt([4][3]Image, "units/vehicles/track_effects/jeep_track_{planet}_r{angle}_n{frame}.png", .nothing, .{ .planet = planet });
+                f.track[1][p] = jeep ++ jeep;
+            }
+            f.tank_dirt[p] = @splat(@splat(none));
+            switch (planet) {
+                .city => {},
+                .jungle => f.tank_dirt[p][0] = try a.loadAt([6]Image, "units/vehicles/tank_dirt/tank_dirt_0_{planet}_n{frame}.png", .nothing, .{ .planet = planet }),
+                else => {
+                    const dirt = try a.loadAt([2][5]Image, "units/vehicles/tank_dirt/tank_dirt_{n}_{planet}_n{frame}.png", .nothing, .{ .planet = planet });
+                    for (dirt, 0..) |d, i| f.tank_dirt[p][i][0..5].* = d;
+                },
+            }
+        }
     }
 };
 
-fn planetName(p: usize) []const u8 {
-    return @tagName(@as(Planet, @enumFromInt(p)));
-}
+// ---------------------------------------------------------------------------
+// The tables (see "Where the art is" above)
+// ---------------------------------------------------------------------------
 
-fn loadEffectsImpl(s: *Sprites, l: Loader) Error!void {
-    const f = &s.fx;
-    f.laser_bullet = try l.seq(2, "units/robots/laser/bullet_n{d:0>2}.png", .{});
-    f.flame_bullet = try l.seq(4, "units/robots/pyro/bullet_n{d:0>2}.png", .{});
-    f.pyro_fire = @splat(@splat(l.a.nothing));
-    for (0..5) |i| for (0..([5]usize{ 4, 4, 4, 6, 6 })[i]) |j| {
-        f.pyro_fire[i][j] = try l.one("other/fire/fire{d}_n{d:0>2}.png", .{ i, j });
-    };
-    f.light_init_fire = try l.seq(4, "units/vehicles/light/initfire_n{d:0>2}.png", .{});
-    f.light_bullet = try l.one("units/vehicles/light/bullet.png", .{});
-    const de = "units/vehicles/death_effects/";
-    f.big_smoke = try l.seq(4, de ++ "big_smoke_n{d:0>2}.png", .{});
-    f.little_fire = try l.seq(4, de ++ "little_fire_n{d:0>2}.png", .{});
-    f.small_fire_smoke = try l.seq(4, de ++ "small_fire_smoke_n{d:0>2}.png", .{});
-    f.fire = try l.seq(4, de ++ "fire_n{d:0>2}.png", .{});
-    f.spark = try l.seq(6, de ++ "spark_n{d:0>2}.png", .{});
-    f.side_explosion = try l.seq(7, "other/explosions/side_explosion_n{d:0>2}.png", .{});
-    f.unit_particle = try l.seq(20, "other/particles/unit_particle_n{d:0>2}.png", .{});
-    f.tough_bullet = try l.seq(2, "units/robots/tough/bullet_n{d:0>2}.png", .{});
-    f.mushroom = try l.seq(12, "units/robots/tough/mushroom_n{d:0>2}.png", .{});
-    f.tough_smoke = try l.seq(8, "units/robots/tough/smoke_n{d:0>2}.png", .{});
-    f.mo_bullet = try l.one("units/vehicles/missile_launcher/bullet.png", .{});
-    f.mc_bullet = try l.one("units/cannons/missile_cannon/bullet.png", .{});
-    f.grenade = try l.seq(4, "other/grenades/grenade_n{d:0>2}.png", .{});
-    f.light_turret = try l.seq(8, "units/vehicles/light/top_pop_n{d:0>2}.png", .{});
-    f.medium_turret = try l.seq(8, "units/vehicles/medium/top_pop_n{d:0>2}.png", .{});
-    f.heavy_turret = try l.teamFrames(8, "units/vehicles/heavy/top_pop_{s}_n{d:0>2}.png", .{}, .nothing);
-    for (0..2) |i| f.building_piece[i] = try l.seq(12, "buildings/death_effects/piece{d}_n{d:0>2}.png", .{i});
-    for (0..5) |i| f.fort_piece[i] = try l.seq(12, "buildings/death_effects/fort_piece{d}_n{d:0>2}.png", .{i});
-    f.cannon_wasted = .{
-        s.cannon[@intFromEnum(k.Cannon.gatling)].wasted[0],
-        s.cannon[@intFromEnum(k.Cannon.gun)].wasted[0],
-        s.cannon[@intFromEnum(k.Cannon.howitzer)].wasted[0],
-        try l.one("units/cannons/missile_cannon/wasted.png", .{}),
-    };
-    f.jeep_wasted = s.vehicle[@intFromEnum(k.Vehicle.jeep)].wasted[0];
-    f.missile_launcher_wasted = try l.one("units/vehicles/missile_launcher/wasted.png", .{});
-    f.apc_wasted = try l.one("units/vehicles/apc/wasted.png", .{});
-    f.crane_wasted = try l.one("units/vehicles/crane/wasted_null.png", .{});
-    f.robot_die = @splat(@splat(@splat(l.a.nothing)));
-    inline for (0..4, .{ 10, 10, 10, 8 }) |d, n| {
-        const frames = try l.teamFrames(n, std.fmt.comptimePrint("units/robots/die{d}", .{d + 1}) ++ "_{s}_n{d:0>2}.png", .{}, .nothing);
-        for (0..teams) |t| for (0..n) |i| {
-            f.robot_die[d][t][i] = frames[t][i];
-        };
-    }
-    f.robot_melt = try l.teamFrames(17, "units/robots/melt_{s}_n{d:0>2}.png", .{}, .nothing);
-    f.robot_flip = try l.teamFrames(33, "units/robots/die5_{s}_n{d:0>2}.png", .{}, .nothing);
-    for (0..planets) |p| {
-        const pn = planetName(p);
-        const re = "planets/rock_effects/";
-        f.rock_mid[0][p] = try l.seq(8, re ++ "debri_mid0_{s}_n{d:0>2}.png", .{pn});
-        f.rock_mid[1][p] = try l.seq(8, re ++ "debri_mid1_{s}_n{d:0>2}.png", .{pn});
-        f.rock_small[p] = try l.seq(16, re ++ "debri_small_{s}_n{d:0>2}.png", .{pn});
-        f.rock_large[0][p] = try l.seq(12, re ++ "debri_large0_{s}_n{d:0>2}.png", .{pn});
-        const p_enum: Planet = @enumFromInt(p);
-        f.rock_large[1][p] = if (p_enum == .desert or p_enum == .city) @splat(l.a.nothing) else try l.seq(12, re ++ "debri_large1_{s}_n{d:0>2}.png", .{pn});
-        f.bridge_debris[p] = try l.seq(12, "planets/bridge_effects/debri_large_{s}_n{d:0>2}.png", .{pn});
-        // Tracks: none in the city, jeeps only in the desert.
-        f.track[0][p] = @splat(@splat(l.a.nothing));
-        f.track[1][p] = @splat(@splat(l.a.nothing));
-        for (0..2) |t| {
-            if (p_enum == .city or (t == 1 and p_enum != .desert)) continue;
-            for (0..4) |d| {
-                const kind = if (t == 0) "tank" else "jeep";
-                f.track[t][p][d] = try l.seq(3, "units/vehicles/track_effects/{s}_track_{s}_r{d:0>3}_n{d:0>2}.png", .{ kind, pn, angle(d) });
-                f.track[t][p][d + 4] = f.track[t][p][d];
-            }
-        }
-        const dirts: usize, const frames: usize = switch (p_enum) {
-            .jungle => .{ 1, 6 },
-            .city => .{ 0, 0 },
-            else => .{ 2, 5 },
-        };
-        f.tank_dirt[p] = @splat(@splat(l.a.nothing));
-        for (0..dirts) |d| for (0..frames) |i| {
-            f.tank_dirt[p][d][i] = try l.one("units/vehicles/tank_dirt/tank_dirt_{d}_{s}_n{d:0>2}.png", .{ d, pn, i });
-        };
-    }
-    f.map_object = try l.seq(map_objects, "other/map_items/no_shadow{d}.png", .{});
-    for (0..dirs) |d| {
-        f.track_dust[d] = try l.seq(7, "units/vehicles/track_dust_r{d:0>3}_n{d:0>2}.png", .{angle(d)});
-        f.track_spark[d] = try l.seq(4, "units/vehicles/track_spark_r{d:0>3}_n{d:0>2}.png", .{angle(d)});
-    }
-    for (0..3) |i| f.tank_oil[i] = try l.seq(3, "units/vehicles/tank_oil_{d}_n{d:0>2}.png", .{i});
-    f.ground_spark = try l.seq(6, "units/vehicles/ground_spark_n{d:0>2}.png", .{});
-}
+const item_art = .{
+    .flag = .{ "other/flag_{team}_{n}.png", .file },
+    .grenades = "other/map_items/grenades.png",
+    .rockets = "other/map_items/rockets.png",
+    .map_object = "other/map_items/map_object{n}.png",
+    .hut = "other/map_items/hut_{planet}.png",
+    .rocks = "planets/rocks_{planet}.png",
+};
+
+const building_art = .{
+    .exhaust = "buildings/exhaust_{n}.png",
+    .little_exhaust = "buildings/little_exhaust_{n}.png",
+    .bridge = "planets/bridge_{planet}.png",
+};
+
+const fort_art = .{
+    .front = "buildings/fort/fort_{planet}_front.png",
+    .back = "buildings/fort/fort_{planet}_back.png",
+    .front_destroyed = "buildings/fort/fort_{planet}_front_destroyed.png",
+    .back_destroyed = "buildings/fort/fort_{planet}_back_destroyed.png",
+    .flag = .{ "buildings/fort/flag_{team}_n{frame}.png", .file },
+};
+
+const radar_art = .{
+    .destroyed = "buildings/radar/base_destroyed_{planet}.png",
+    .box_spinner = "buildings/radar/box_spinner_{n}.png",
+    .dish = "buildings/radar/dish_{n}.png",
+    .front_light = "buildings/radar/front_light_{n}.png",
+    .side_light = "buildings/radar/side_light_{n}.png",
+};
+
+const robot_factory_art = .{
+    .spin = "buildings/robot/spin_{n}.png",
+    .green_box = "buildings/robot/green_box_{n}.png",
+    .robot = "buildings/robot/robot_{n}.png",
+    .light = "buildings/robot/light_{n}.png",
+    .double_light = "buildings/robot/double_light_{n}.png",
+};
+
+const vehicle_factory_art = .{
+    .spin = "buildings/vehicle/spin_{n}.png",
+    .vent = "buildings/vehicle/vent_{n}.png",
+    .lights = "buildings/vehicle/lights_{n}.png",
+    .tank = "buildings/vehicle/tank_{n}.png",
+    .bulb = "buildings/vehicle/bulb_{n}.png",
+};
+
+const repair_art = .{
+    .destroyed = "buildings/repair/base_destroyed_{planet}.png",
+    .smoke_stack = "buildings/repair/smoke_stack_{n}.png",
+    .text_box = "buildings/repair/text_box_{n}.png",
+    .bulb = "buildings/repair/bulb_{n}.png",
+    .side_light = "buildings/repair/side_light_{n}.png",
+    .front_light = "buildings/repair/front_light_{n}.png",
+};
+
+const jeep_art = .{
+    .gun = "units/vehicles/jeep/fire_r{angle}_n00.png",
+    .gun_fire = "units/vehicles/jeep/fire_r{angle}_n01.png",
+};
+
+const robot_art = .{
+    .null_img = "units/robots/null.png",
+    .stand = "units/robots/stand_{team}_r{angle}.png",
+    .walk = "units/robots/walk_{team}_r{angle}_n{frame}.png",
+    .throw = "units/robots/throw_{team}_r{angle}_n{frame}.png",
+    .beer = "units/robots/beer_{team}_n{frame}.png",
+    .cigarette = "units/robots/cigarette_{team}_n{frame}.png",
+    .full_area_scan = "units/robots/full_area_scan_{team}_n{frame}.png",
+    .head_stretch = "units/robots/head_stretch_{team}_n{frame}.png",
+    .pickup_up = "units/robots/pickup-up_{team}_n{frame}.png",
+    .pickup_down = "units/robots/pickup-down_{team}_n{frame}.png",
+    .tank_robot = .{ "units/robots/tank_fire_{team}_r{angle}_n{frame}.png", .red },
+    .tank_lid = "units/vehicles/tank_lid_r{angle}_n{frame}.png",
+};
+
+const effect_art = .{
+    .laser_bullet = "units/robots/laser/bullet_n{frame}.png",
+    .flame_bullet = "units/robots/pyro/bullet_n{frame}.png",
+    .light_init_fire = "units/vehicles/light/initfire_n{frame}.png",
+    .light_bullet = "units/vehicles/light/bullet.png",
+    .big_smoke = "units/vehicles/death_effects/big_smoke_n{frame}.png",
+    .little_fire = "units/vehicles/death_effects/little_fire_n{frame}.png",
+    .small_fire_smoke = "units/vehicles/death_effects/small_fire_smoke_n{frame}.png",
+    .fire = "units/vehicles/death_effects/fire_n{frame}.png",
+    .spark = "units/vehicles/death_effects/spark_n{frame}.png",
+    .side_explosion = "other/explosions/side_explosion_n{frame}.png",
+    .unit_particle = "other/particles/unit_particle_n{frame}.png",
+    .tough_bullet = "units/robots/tough/bullet_n{frame}.png",
+    .mushroom = "units/robots/tough/mushroom_n{frame}.png",
+    .tough_smoke = "units/robots/tough/smoke_n{frame}.png",
+    .mo_bullet = "units/vehicles/missile_launcher/bullet.png",
+    .mc_bullet = "units/cannons/missile_cannon/bullet.png",
+    .grenade = "other/grenades/grenade_n{frame}.png",
+    .light_turret = "units/vehicles/light/top_pop_n{frame}.png",
+    .medium_turret = "units/vehicles/medium/top_pop_n{frame}.png",
+    .heavy_turret = "units/vehicles/heavy/top_pop_{team}_n{frame}.png",
+    .building_piece = "buildings/death_effects/piece{n}_n{frame}.png",
+    .fort_piece = "buildings/death_effects/fort_piece{n}_n{frame}.png",
+    .missile_launcher_wasted = "units/vehicles/missile_launcher/wasted.png",
+    .apc_wasted = "units/vehicles/apc/wasted.png",
+    .crane_wasted = "units/vehicles/crane/wasted_null.png",
+    .robot_melt = "units/robots/melt_{team}_n{frame}.png",
+    .robot_flip = "units/robots/die5_{team}_n{frame}.png",
+    .rock_mid = "planets/rock_effects/debri_mid{n}_{planet}_n{frame}.png",
+    .rock_small = "planets/rock_effects/debri_small_{planet}_n{frame}.png",
+    .bridge_debris = "planets/bridge_effects/debri_large_{planet}_n{frame}.png",
+    .map_object = "other/map_items/no_shadow{n}.png",
+    .track_dust = "units/vehicles/track_dust_r{angle}_n{frame}.png",
+    .track_spark = "units/vehicles/track_spark_r{angle}_n{frame}.png",
+    .tank_oil = "units/vehicles/tank_oil_{n}_n{frame}.png",
+    .ground_spark = "units/vehicles/ground_spark_n{frame}.png",
+};
 
 test "load all sprites" {
     const a = try Assets.init(std.testing.allocator, "bin/assets");
