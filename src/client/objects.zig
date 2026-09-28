@@ -6,6 +6,7 @@
 //! changes; the parts units can walk behind are drawn over them afterwards.
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const font = @import("font.zig");
@@ -75,7 +76,7 @@ pub const Visual = struct {
         v.timer = null;
         if (seconds < 0) return;
         var buf: [32]u8 = undefined;
-        const text = std.fmt.bufPrint(&buf, "{d}:{d:0>2}", .{ @divTrunc(seconds, 60), @mod(seconds, 60) }) catch unreachable;
+        const text = fit(&buf, "{d}:{d:0>2}", .{ @divTrunc(seconds, 60), @mod(seconds, 60) });
         // Without memory for it, the timer is not shown.
         v.timer = fonts.get(.green_building).render(gpa, text) catch null;
     }
@@ -400,12 +401,12 @@ pub const Renderer = struct {
     }
 
     /// Items and units, farther ones (by their bottom edge) first.
-    pub fn draw(r: *Renderer, cv: Canvas, world: *const World, view: gfx.Rect) void {
+    pub fn draw(r: *Renderer, cv: Canvas, world: *const World, view: gfx.Rect) std.mem.Allocator.Error!void {
         if (r.planet == null) return;
         r.order.clearRetainingCapacity();
         for (world.objects.items) |o| {
             if (o.kind == .building or !visible(o, view, 32)) continue;
-            r.order.append(r.gpa, o) catch return;
+            try r.order.append(r.gpa, o);
         }
         std.mem.sort(*Object, r.order.items, {}, struct {
             fn lessThan(_: void, a: *Object, b: *Object) bool {

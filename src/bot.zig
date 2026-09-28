@@ -377,7 +377,7 @@ test "a bot plays against a server" {
         for (server.world.objects.items) |o| {
             if (o.owner == .blue and o.isMobile() and o.waypoints.items.len > 0) orders_seen = true;
         }
-        io.sleep(.fromMilliseconds(10), .awake) catch {};
+        try io.sleep(.fromMilliseconds(10), .awake);
     }
     try testing.expect(bot.session.team == .blue);
     try testing.expect(orders_seen);

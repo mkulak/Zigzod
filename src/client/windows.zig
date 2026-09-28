@@ -3,6 +3,7 @@
 //! guns. It floats over the map next to its building.
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const font = @import("font.zig");
@@ -489,10 +490,10 @@ pub const Production = struct {
 
         var buf: [16]u8 = undefined;
         if (timeShown(world, o, b, st, p.selected(0, st, b))) |secs| {
-            small.draw(cv, std.fmt.bufPrint(&buf, "{d}:{d:0>2}", .{ @divTrunc(secs, 60), @mod(secs, 60) }) catch "", x + 90, y + 35);
+            small.draw(cv, fit(&buf, "{d}:{d:0>2}", .{ @divTrunc(secs, 60), @mod(secs, 60) }), x + 90, y + 35);
         }
         const health: i64 = if (o.max_health > 0) std.math.clamp(@divTrunc(100 * @as(i64, o.health), o.max_health), 0, 100) else 0;
-        const health_text = std.fmt.bufPrint(&buf, "{d}%", .{health}) catch "";
+        const health_text = fit(&buf, "{d}%", .{health});
         small.draw(cv, health_text, x + 86 - (small.width(health_text) >> 1), y + 6);
 
         for (p.selectors, 0..) |s, i| {
@@ -819,9 +820,9 @@ pub const FactoryList = struct {
                 .vehicle_factory => "Vehicle Factory",
                 else => "Fort Factory",
             },
-            std.fmt.bufPrint(&bufs[0], "{d}%", .{@as(i32, @intFromFloat(health * 100))}) catch "",
+            fit(&bufs[0], "{d}%", .{@as(i32, @intFromFloat(health * 100))}),
         };
-        texts[2][0] = std.fmt.bufPrint(&bufs[2], "Tech Level {d}", .{b.level + 1}) catch "";
+        texts[2][0] = fit(&bufs[2], "Tech Level {d}", .{b.level + 1});
         if (o.isDestroyed()) {
             fill[1] = 0;
             fill[2] = 0;
@@ -837,7 +838,7 @@ pub const FactoryList = struct {
                     fill[1] = std.math.clamp((time - b.init_time) / @max(b.final_time - b.init_time, 0.001), 0, 1);
                     if (b.unit) |u| texts[1][0] = productionName(u);
                     const left: i64 = @intFromFloat(@max(b.final_time - time, 0));
-                    texts[1][1] = std.fmt.bufPrint(&bufs[1], "{d}:{d:0>2}", .{ @mod(@divTrunc(left, 60), 60), @mod(left, 60) }) catch "";
+                    texts[1][1] = fit(&bufs[1], "{d}:{d:0>2}", .{ @mod(@divTrunc(left, 60), 60), @mod(left, 60) });
                 },
             }
         }

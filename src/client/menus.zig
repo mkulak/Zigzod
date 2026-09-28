@@ -7,6 +7,7 @@
 //! or clicked, so there is no widget tree to keep in sync with the game.
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const font = @import("font.zig");
@@ -206,7 +207,7 @@ pub const Art = struct {
         for (&art.radio, [_][]const u8{ "left", "center", "right", "selector" }) |*r, name| r.* = try a.image(art_dir ++ "radio/radio_{s}.png", .{name});
         for (&art.buttons, [_][]const u8{ "normal", "pressed", "green" }) |*b, state| {
             var buf: [64]u8 = undefined;
-            b.* = try .load(a, std.fmt.bufPrint(&buf, "generic_button_{s}_", .{state}) catch unreachable);
+            b.* = try .load(a, fit(&buf, "generic_button_{s}_", .{state}));
         }
         return art;
     }
@@ -398,11 +399,11 @@ pub const Menu = struct {
             .options => {
                 var y: i32 = title_h;
                 const volume = @min(ctx.volume, volume_names.len - 1);
-                l.label(.{ .x = side, .y = y, .w = l.inner(), .text = std.fmt.bufPrint(&l.text[0], "Set Volume: {s}", .{volume_names[volume]}) catch "" });
+                l.label(.{ .x = side, .y = y, .w = l.inner(), .text = fit(&l.text[0], "Set Volume: {s}", .{volume_names[volume]}) });
                 y += label_h + 1;
                 l.radio(.{ .x = side, .y = y, .count = volume_names.len, .selected = volume, .of = .volume });
                 y += radio_h + 2;
-                l.label(.{ .x = side, .y = y, .w = l.inner(), .text = std.fmt.bufPrint(&l.text[1], "Set Game Speed: {d:.0}%", .{100 * ctx.speed}) catch "" });
+                l.label(.{ .x = side, .y = y, .w = l.inner(), .text = fit(&l.text[1], "Set Game Speed: {d:.0}%", .{100 * ctx.speed}) });
                 y += label_h + 1;
                 var speed: u8 = speeds.len - 1;
                 for (speeds, 0..) |s, i| if (ctx.speed <= s + 0.01) {
@@ -461,7 +462,7 @@ pub const Menu = struct {
             },
             .player_list => {
                 l.label(.{ .x = side + 4, .y = title_h, .w = l.inner(), .text = "Players Online:" });
-                l.label(.{ .x = side, .y = title_h, .w = l.inner(), .text = std.fmt.bufPrint(&l.text[0], "{d}", .{playerCount(ctx)}) catch "", .justify = .right });
+                l.label(.{ .x = side, .y = title_h, .w = l.inner(), .text = fit(&l.text[0], "{d}", .{playerCount(ctx)}), .justify = .right });
                 l.list = .{ .x = side, .y = title_h + label_h + 2, .w = l.inner(), .h = list_h };
                 l.h = title_h + list_h + bottom + label_h + 2;
             },

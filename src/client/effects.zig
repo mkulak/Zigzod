@@ -5,6 +5,10 @@
 //! Effects live in two lists: ground effects (tracks, dust, oil) are drawn
 //! under the objects, the rest over them. Effects may spawn more effects,
 //! leave craters and throw particles off nearby units.
+//!
+//! Effects are only decoration, so they never fail: an effect (or its
+//! sound, or a rotated image) that can't get memory is left out, which is
+//! why the adding functions below ignore allocation errors.
 
 const std = @import("std");
 const game = @import("../game.zig");

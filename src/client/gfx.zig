@@ -403,7 +403,10 @@ pub const TeamPalettes = struct {
             const team: k.Team = @enumFromInt(i);
             if (team == .none or team == .red) continue;
             var buf: [256]u8 = undefined;
-            const path = std.fmt.bufPrintZ(&buf, "{s}/teams/{s}_palette.bmp", .{ assets, team.name() }) catch continue;
+            const path = std.fmt.bufPrintZ(&buf, "{s}/teams/{s}_palette.bmp", .{ assets, team.name() }) catch {
+                std.log.warn("palette path too long: {s}", .{assets});
+                continue;
+            };
             const img = Image.load(gpa, path) catch |err| {
                 std.log.warn("could not load {s}: {t}", .{ path, err });
                 continue;

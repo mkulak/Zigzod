@@ -5,6 +5,7 @@
 //! Without an audio device everything here quietly does nothing.
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const c = @import("c");
 const k = @import("../game/constants.zig");
 const portrait = @import("portrait.zig");
@@ -176,11 +177,11 @@ pub const Sounds = struct {
         for (&s.computer, 0..) |*slot, i| slot.* = load(assets, .{ .file = computerFile(@enumFromInt(i)) }, &buf);
         for (&s.losing_lines, 0..) |*slot, i| {
             var name: [32]u8 = undefined;
-            slot.* = load(assets, .{ .file = std.fmt.bufPrint(&name, "comp_youre_losing_{d:0>2}.wav", .{i}) catch continue }, &buf);
+            slot.* = load(assets, .{ .file = fit(&name, "comp_youre_losing_{d:0>2}.wav", .{i}) }, &buf);
         }
         for (&s.voice, 1..) |*slot, i| {
             var name: [16]u8 = undefined;
-            slot.* = load(assets, .{ .file = std.fmt.bufPrint(&name, "ROB{d:0>2}.wav", .{i}) catch continue }, &buf);
+            slot.* = load(assets, .{ .file = fit(&name, "ROB{d:0>2}.wav", .{i}) }, &buf);
         }
         s.loops = .{
             load(assets, .{ .file = "radar_sound.wav", .volume = 20 }, &buf),
@@ -414,7 +415,10 @@ pub const Music = struct {
     fn load(m: *Music, assets: []const u8) void {
         var buf: [512]u8 = undefined;
         for (&m.pieces, [_][]const u8{ "desert", "volcanic", "jungle" }) |*pc, name| {
-            const path = std.fmt.bufPrintZ(&buf, "{s}/sounds/music_{s}.ogg", .{ assets, name }) catch continue;
+            const path = std.fmt.bufPrintZ(&buf, "{s}/sounds/music_{s}.ogg", .{ assets, name }) catch {
+                std.log.warn("music path too long: {s}", .{assets});
+                continue;
+            };
             var err: c_int = 0;
             pc.* = c.stb_vorbis_open_filename(path.ptr, &err, null);
             if (pc.* == null) std.log.warn("could not load music {s}", .{path});

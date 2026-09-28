@@ -7,6 +7,7 @@
 //! team or one player) after each step.
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const k = @import("constants.zig");
 const Settings = @import("settings.zig").Settings;
 const mapfmt = @import("map.zig");
@@ -206,8 +207,8 @@ pub const World = struct {
                 try w.linkFlag(o, zi);
             }
         }
-        for (w.objects.items) |o| _ = w.setDefaultProduction(o);
-        w.resetZoneOwnership(false);
+        for (w.objects.items) |o| _ = try w.setDefaultProduction(o);
+        try w.resetZoneOwnership(false);
     }
 
     fn linkFlag(w: *World, flag: *Object, zi: usize) Error!void {
@@ -608,7 +609,7 @@ pub const World = struct {
             if (f.kind == .flag and f.owner == team) try w.awardZone(f, .none, null);
         }
         var buf: [96]u8 = undefined;
-        try w.news(.all, std.fmt.bufPrint(&buf, "The {s} team has been eliminated", .{team.name()}) catch unreachable, .{});
+        try w.news(.all, fit(&buf, "The {s} team has been eliminated", .{team.name()}), .{});
     }
 
     /// A team without units loses its forts.
@@ -756,14 +757,14 @@ pub const World = struct {
         for (flag.kind.flag.linked.items) |id| {
             const b = w.find(id) orelse continue;
             try w.resetObjectTeam(b, team);
-            if (w.setDefaultProduction(b)) try w.relayBuildingState(b, .all);
+            if (try w.setDefaultProduction(b)) try w.relayBuildingState(b, .all);
             if (b.building().?.type == .radar) has_radar = true;
         }
         w.zones.items[zi].owner = team;
         try w.sendPacket(.all, .set_zone_info, protocol.ZoneInfo{ .zone_number = @intCast(zi), .owner = @intCast(@intFromEnum(team)) });
         if (old_team != .none) try w.compMessage(old_team, -1, .territory_lost);
         if (has_radar) try w.compMessage(team, -1, .radar_activated);
-        w.resetZoneOwnership(true);
+        try w.resetZoneOwnership(true);
     }
 
     /// Units walking over an enemy flag capture it (checked 5x a second).
@@ -783,7 +784,7 @@ pub const World = struct {
     }
 
     /// Recompute each team's share of zones, which speeds up production.
-    pub fn resetZoneOwnership(w: *World, notify: bool) void {
+    pub fn resetZoneOwnership(w: *World, notify: bool) Error!void {
         var flags: u32 = 0;
         var owned: [k.Team.count]u32 = @splat(0);
         for (w.objects.items) |o| if (o.kind == .flag) {
@@ -796,7 +797,7 @@ pub const World = struct {
         if (flags == 0) return;
         for (w.objects.items) |o| {
             if (w.resetBuildTime(o, w.team_zone_percentage[@intFromEnum(o.owner)]) and notify) {
-                w.relayBuildingState(o, .all) catch {};
+                try w.relayBuildingState(o, .all);
             }
         }
     }
@@ -912,14 +913,14 @@ pub const World = struct {
     // -----------------------------------------------------------------------
 
     /// Start producing the first unit on the list if nothing is chosen.
-    pub fn setDefaultProduction(w: *World, o: *Object) bool {
+    pub fn setDefaultProduction(w: *World, o: *Object) Error!bool {
         const b = o.building() orelse return false;
         if (b.unit != null or b.state != .select) return false;
         const u = buildlist.first(b.type, b.level) orelse return false;
         return w.setProduction(o, u);
     }
 
-    pub fn setProduction(w: *World, o: *Object, u: obj.Unit) bool {
+    pub fn setProduction(w: *World, o: *Object, u: obj.Unit) Error!bool {
         const b = o.building() orelse return false;
         if (o.owner == .none or !b.producesUnits()) return false;
         if (b.unit) |cur| if (cur.kind == u.kind and cur.id == u.id) return false;
@@ -928,17 +929,17 @@ pub const World = struct {
         b.state = .building;
         b.init_time = w.now();
         _ = w.recalcBuildTime(o);
-        if (b.queue.items.len == 0) _ = w.addToQueue(o, u, true);
+        if (b.queue.items.len == 0) _ = try w.addToQueue(o, u, true);
         return true;
     }
 
-    pub fn addToQueue(w: *World, o: *Object, u: obj.Unit, front: bool) bool {
+    pub fn addToQueue(w: *World, o: *Object, u: obj.Unit, front: bool) Error!bool {
         const b = o.building() orelse return false;
         if (o.owner == .none or !b.producesUnits()) return false;
         if (b.queue.items.len >= obj.max_queue_items) return false;
         if (!buildlist.contains(b.type, b.level, u)) return false;
         const pos: usize = if (front) 0 else b.queue.items.len;
-        b.queue.insert(w.gpa, pos, u) catch return false;
+        try b.queue.insert(w.gpa, pos, u);
         return true;
     }
 
@@ -962,12 +963,12 @@ pub const World = struct {
     }
 
     /// After a unit is built: continue with the queue or stop.
-    pub fn resetProduction(w: *World, o: *Object) void {
+    pub fn resetProduction(w: *World, o: *Object) Error!void {
         const b = o.building() orelse return;
         if (b.queue.items.len > 0) {
             const next = b.queue.orderedRemove(0);
             _ = stopProduction(o, false);
-            _ = w.setProduction(o, next);
+            _ = try w.setProduction(o, next);
         } else {
             _ = stopProduction(o, true);
         }

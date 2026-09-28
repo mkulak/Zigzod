@@ -4,6 +4,7 @@
 //! vote box (RenderNews, ZCompMessageEngine, ZVote).
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const font = @import("font.zig");
@@ -40,14 +41,12 @@ pub const News = struct {
 
     /// A line in the given color (black means plain white), shown for a
     /// while (`time` is real time).
-    pub fn add(n: *News, text: []const u8, color_in: gfx.Color, time: f64) void {
+    pub fn add(n: *News, text: []const u8, color_in: gfx.Color, time: f64) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
         const color: gfx.Color = if (color_in.r == 0 and color_in.g == 0 and color_in.b == 0) .{ .r = 255, .g = 255, .b = 255 } else color_in;
-        const copy = n.gpa.dupe(u8, text) catch return;
-        n.lines.insert(n.gpa, 0, .{ .text = copy, .color = color, .until = time + lasting }) catch {
-            n.gpa.free(copy);
-            return;
-        };
+        const copy = try n.gpa.dupe(u8, text);
+        errdefer n.gpa.free(copy);
+        try n.lines.insert(n.gpa, 0, .{ .text = copy, .color = color, .until = time + lasting });
         while (n.lines.items.len > max_lines) n.gpa.free(n.lines.pop().?.text);
     }
 
@@ -205,7 +204,7 @@ pub const Notices = struct {
                 const count = o.building().?.cannons.items.len;
                 if (count > 1) {
                     var tb: [8]u8 = undefined;
-                    small.draw(cv, std.fmt.bufPrint(&tb, "X{d}", .{count}) catch "", area.x + 8 + gun.width() + 4, gy + 3);
+                    small.draw(cv, fit(&tb, "X{d}", .{count}), area.x + 8 + gun.width() + 4, gy + 3);
                 }
                 gy += 2 + gun.height();
             }
@@ -236,10 +235,10 @@ pub const Notices = struct {
             }
             var nb: [4][12]u8 = undefined;
             centered(f, cv, desc, x + 57, y + 41);
-            centered(f, cv, std.fmt.bufPrint(&nb[0], "{d}", .{v.have}) catch "", x + 57, y + 53);
-            centered(f, cv, std.fmt.bufPrint(&nb[1], "{d}", .{v.needed}) catch "", x + 57, y + 64);
-            centered(f, cv, std.fmt.bufPrint(&nb[2], "{d}", .{v.yes}) catch "", x + 22, y + 64);
-            centered(f, cv, std.fmt.bufPrint(&nb[3], "{d}", .{v.no}) catch "", x + 91, y + 64);
+            centered(f, cv, fit(&nb[0], "{d}", .{v.have}), x + 57, y + 53);
+            centered(f, cv, fit(&nb[1], "{d}", .{v.needed}), x + 57, y + 64);
+            centered(f, cv, fit(&nb[2], "{d}", .{v.yes}), x + 22, y + 64);
+            centered(f, cv, fit(&nb[3], "{d}", .{v.no}), x + 91, y + 64);
         }
     }
 };
@@ -255,6 +254,6 @@ test "messages blink, then stay, then go" {
 
     var news: News = .{ .gpa = std.testing.allocator };
     defer news.deinit();
-    for (0..60) |i| news.add(if (i % 2 == 0) "hello" else "world", .{ .r = 255, .g = 0, .b = 0 }, 0);
+    for (0..60) |i| try news.add(if (i % 2 == 0) "hello" else "world", .{ .r = 255, .g = 0, .b = 0 }, 0);
     try std.testing.expectEqual(50, news.lines.items.len);
 }

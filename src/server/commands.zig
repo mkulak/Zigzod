@@ -1,6 +1,7 @@
 //! Chat commands (`/help`, `/changemap 3`, ...), from zserver_commands.cpp.
 
 const std = @import("std");
+const Line = @import("../text.zig").Line;
 const k = @import("../game/constants.zig");
 const protocol = @import("../net/protocol.zig");
 const srv = @import("server.zig");
@@ -93,14 +94,14 @@ fn listMaps(s: *Server, p: *Player, _: []const u8) Error!void {
     const maps = s.selectable_maps.items;
     while (i < maps.len) {
         var buf: [1024]u8 = undefined;
-        var w: std.Io.Writer = .fixed(&buf);
-        w.writeAll("map list: ") catch {};
+        var line: Line = .init(&buf);
+        line.add("map list: ", .{});
         const end = @min(i + 4, maps.len);
         while (i < end) : (i += 1) {
-            if (i % 4 != 0) w.writeAll(", ") catch {};
-            w.print("{d}. {s}", .{ i, maps[i] }) catch {};
+            if (i % 4 != 0) line.add(", ", .{});
+            line.add("{d}. {s}", .{ i, maps[i] });
         }
-        try tell(s, p, w.buffered());
+        try tell(s, p, line.text());
     }
 }
 
@@ -128,17 +129,17 @@ fn stopBot(s: *Server, p: *Player, args: []const u8) Error!void {
         return;
     };
     var buf: [256]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
-    w.writeAll("stop bot error: invalid team, available teams: ") catch {};
+    var line: Line = .init(&buf);
+    line.add("stop bot error: invalid team, available teams: ", .{});
     var first = true;
     for (0..k.Team.count) |i| {
         const team: k.Team = @enumFromInt(i);
         if (!s.teamHasBot(team, false)) continue;
-        if (!first) w.writeAll(", ") catch {};
-        w.writeAll(team.name()) catch {};
+        if (!first) line.add(", ", .{});
+        line.add("{s}", .{team.name()});
         first = false;
     }
-    try tell(s, p, w.buffered());
+    try tell(s, p, line.text());
 }
 
 fn playerInfo(s: *Server, p: *Player, _: []const u8) Error!void {

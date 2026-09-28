@@ -298,4 +298,5 @@ test {
     _ = @import("client.zig");
     _ = @import("bot.zig");
     _ = @import("editor.zig");
+    _ = @import("text.zig");
 }

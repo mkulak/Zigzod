@@ -8,6 +8,7 @@
 //! exactly what a game on the map will look like.
 
 const std = @import("std");
+const fit = @import("text.zig").fit;
 const c = @import("c");
 const game = @import("game.zig");
 const gfx = @import("client/gfx.zig");
@@ -254,7 +255,8 @@ pub const Editor = struct {
     /// A zone being dragged out, from this tile.
     zone_start: ?[2]i32 = null,
     ruler: enum { off, edges, grid } = .off,
-    status: std.ArrayList(u8) = .empty,
+    status_buf: [160]u8 = undefined,
+    status: []const u8 = "",
     status_until: f64 = 0,
 
     view_x: i32 = 0,
@@ -332,7 +334,6 @@ pub const Editor = struct {
         e.undo.deinit(gpa);
         e.redo.deinit(gpa);
         e.brush.deinit(gpa);
-        e.status.deinit(gpa);
         gpa.destroy(e.terrain_info);
         e.assets.deinit();
         e.display.close();
@@ -351,7 +352,7 @@ pub const Editor = struct {
             e.scroll(now - e.last_frame);
             e.last_frame = now;
             if (e.dirty) try e.rebuild();
-            e.render(now);
+            try e.render(now);
             e.io.sleep(.fromMilliseconds(15), .awake) catch return;
         }
     }
@@ -373,8 +374,7 @@ pub const Editor = struct {
     }
 
     fn say(e: *Editor, comptime fmt: []const u8, args: anytype) void {
-        e.status.clearRetainingCapacity();
-        e.status.print(e.gpa, fmt, args) catch {};
+        e.status = fit(&e.status_buf, fmt, args);
         e.status_until = e.realTime() + 4;
     }
 
@@ -459,7 +459,7 @@ pub const Editor = struct {
         const y = e.mouse_y;
         if (press) e.group +%= 1;
         if (x < panel_w and y < palette_h) {
-            if (press) e.pickTile(@intCast(@divTrunc(y, tile) * mapfmt.palette_width + @divTrunc(x, tile)));
+            if (press) try e.pickTile(@intCast(@divTrunc(y, tile) * mapfmt.palette_width + @divTrunc(x, tile)));
             return;
         }
         if (e.minimapSpot(x, y)) |p| {
@@ -509,7 +509,7 @@ pub const Editor = struct {
 
     /// Choose a tile to paint with; with ctrl, add it to the brush (or
     /// take it off).
-    fn pickTile(e: *Editor, t: u16) void {
+    fn pickTile(e: *Editor, t: u16) !void {
         if (t >= mapfmt.palette_tiles or !e.terrain_info.palette(e.model.planet())[t].is_usable) return;
         if (e.keys.ctrl) {
             if (std.mem.indexOfScalar(u16, e.brush.items, t)) |i| {
@@ -517,7 +517,7 @@ pub const Editor = struct {
                 return;
             }
         } else e.brush.clearRetainingCapacity();
-        e.brush.append(e.gpa, t) catch {};
+        try e.brush.append(e.gpa, t);
     }
 
     fn nextObject(e: *Editor, forward: bool) void {
@@ -666,23 +666,23 @@ pub const Editor = struct {
     // Drawing
     // -----------------------------------------------------------------------
 
-    fn render(e: *Editor, now: f64) void {
+    fn render(e: *Editor, now: f64) !void {
         e.display.frame.fill(null, .{ .r = 0, .g = 0, .b = 0 });
         const screen: Canvas = .{ .target = e.display.frame, .clip = .{ .x = 0, .y = 0, .w = e.width, .h = e.height } };
         const view: Rect = .{ .x = e.view_x, .y = e.view_y, .w = e.viewW(), .h = e.viewH() };
         const cv: Canvas = .{ .target = e.display.frame, .clip = .{ .x = map_x, .y = 0, .w = view.w, .h = view.h }, .dx = map_x - e.view_x, .dy = -e.view_y };
         if (e.ground) |*g| {
             e.objects.update(&e.world, g, now);
-            g.draw(cv, view, now, e.world.zones.items, e.prng.random());
+            try g.draw(cv, view, now, e.world.zones.items, e.prng.random());
             e.objects.drawPre(cv, &e.world, view);
-            e.objects.draw(cv, &e.world, view);
+            try e.objects.draw(cv, &e.world, view);
             e.objects.drawAfter(cv, &e.world, view);
             e.drawCursor(cv);
             e.drawZones(cv);
             if (e.ruler != .off) e.drawRuler(screen, view);
         }
         e.drawPalette(screen);
-        e.drawMinimap(screen, view);
+        try e.drawMinimap(screen, view);
         e.drawInfo(screen, now);
         e.display.present();
     }
@@ -743,7 +743,7 @@ pub const Editor = struct {
             screen.fill(.{ .x = x, .y = view.h - 4, .w = 1, .h = 4 }, col);
             if (every5) {
                 var buf: [8]u8 = undefined;
-                small.drawTinted(screen, std.fmt.bufPrint(&buf, "{d}", .{tx}) catch "", x + 2, 6, col, 255);
+                small.drawTinted(screen, fit(&buf, "{d}", .{tx}), x + 2, 6, col, 255);
             }
         }
         var ty = @divFloor(view.y, tile) + 1;
@@ -754,7 +754,7 @@ pub const Editor = struct {
             screen.fill(.{ .x = map_x + view.w - 4, .y = y, .w = 4, .h = 1 }, col);
             if (every5) {
                 var buf: [8]u8 = undefined;
-                small.drawTinted(screen, std.fmt.bufPrint(&buf, "{d}", .{ty}) catch "", map_x + 6, y, col, 255);
+                small.drawTinted(screen, fit(&buf, "{d}", .{ty}), map_x + 6, y, col, 255);
             }
         }
     }
@@ -793,13 +793,13 @@ pub const Editor = struct {
     }
 
     /// The whole map scaled down, with units as dots and the view boxed.
-    fn drawMinimap(e: *Editor, screen: Canvas, view: Rect) void {
+    fn drawMinimap(e: *Editor, screen: Canvas, view: Rect) !void {
         const g = if (e.ground) |*g| g else return;
         const s = e.minimapScale();
         if (e.minimap == null) {
             const w: i32 = @max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(e.mapW())) * s)), 1);
             const h: i32 = @max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(e.mapH())) * s)), 1);
-            const img = Image.create(e.gpa, w, h) catch return;
+            const img = try Image.create(e.gpa, w, h);
             var j: i32 = 0;
             while (j < h) : (j += 1) {
                 const row = img.row(j);
@@ -835,7 +835,7 @@ pub const Editor = struct {
         const Line = struct {
             fn put(ft: *const font.Font, cv: Canvas, xx: i32, yy: *i32, col: gfx.Color, comptime fmt: []const u8, args: anytype) void {
                 var buf: [128]u8 = undefined;
-                ft.drawTinted(cv, std.fmt.bufPrint(&buf, fmt, args) catch return, xx, yy.*, col, 255);
+                ft.drawTinted(cv, fit(&buf, fmt, args), xx, yy.*, col, 255);
                 yy.* += 11;
             }
         };
@@ -865,7 +865,7 @@ pub const Editor = struct {
             else
                 Line.put(f, screen, x, &y, white, "Here: {s} ({s})", .{ name, p.team().name() });
         }
-        if (now < e.status_until) Line.put(f, screen, x, &y, .{ .r = 255, .g = 255, .b = 0 }, "{s}", .{e.status.items});
+        if (now < e.status_until) Line.put(f, screen, x, &y, .{ .r = 255, .g = 255, .b = 0 }, "{s}", .{e.status});
     }
 
     /// The whole map as a picture, next to the map file (.png).
@@ -880,12 +880,12 @@ pub const Editor = struct {
         img.fill(null, .{ .r = 0, .g = 0, .b = 0 });
         const whole: Rect = .{ .x = 0, .y = 0, .w = e.mapW(), .h = e.mapH() };
         const cv: Canvas = .{ .target = img, .clip = whole };
-        g.draw(cv, whole, e.realTime(), e.world.zones.items, e.prng.random());
+        g.draw(cv, whole, e.realTime(), e.world.zones.items, e.prng.random()) catch return e.say("out of memory", .{});
         e.objects.drawPre(cv, &e.world, whole);
-        e.objects.draw(cv, &e.world, whole);
+        e.objects.draw(cv, &e.world, whole) catch return e.say("out of memory", .{});
         e.objects.drawAfter(cv, &e.world, whole);
         var buf: [1024]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&buf, "{s}.png", .{e.path}) catch return;
+        const path = std.fmt.bufPrintZ(&buf, "{s}.png", .{e.path}) catch return e.say("path too long", .{});
         const surface = img.asSurface() orelse return e.say("out of memory", .{});
         defer c.SDL_DestroySurface(surface);
         if (!c.SDL_SavePNG(surface, path.ptr)) return e.say("could not write {s}", .{path});

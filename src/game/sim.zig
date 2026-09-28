@@ -1113,7 +1113,7 @@ fn report(w: *World, o: *Object) Error!void {
     if (ev.fired_missile) |p| try w.sendPacket(.all, .fire_missile, protocol.FireMissile{ .ref_id = o.ref_id, .x = p.x, .y = p.y });
     if (ev.build_unit) |u| {
         _ = try w.buildingCreateUnit(o, u);
-        w.resetProduction(o);
+        try w.resetProduction(o);
         try w.relayBuildingState(o, .all);
     }
     if (ev.repair_done) {

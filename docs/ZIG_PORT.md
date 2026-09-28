@@ -27,6 +27,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
 ## Layout
 
     src/main.zig          the `zod` program: play, server, client, bot, edit
+    src/text.zig          text formatted into fixed buffers
     src/game.zig          game data and rules shared by all programs
       game/constants.zig  enums (teams, unit types, ...) - wire values
       game/settings.zig   unit stats / tunables, also the SET_SETTINGS message
@@ -80,6 +81,20 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
 `zig build test` runs all unit tests (including a simulated battle and a
 client talking to a server over a real socket). Tests that read game data
 run from the repository root.
+
+## Errors
+
+* Running out of memory while changing game state (server, world, the
+  client's selection and orders, news, the editor's map) is an error that
+  goes up with `try` to the main loop, which reports it and stops.
+* Visual effects are decoration: an effect that can't get memory is left
+  out (effects.zig), and so is a rotated image the cache can't make.
+* Text for the screen, chat and news is formatted into fixed buffers with
+  `text.fit`, which cuts it to fit instead of dropping it.
+* Missing art is replaced by a placeholder and logged (assets.zig); other
+  files that can't be read (settings, sounds, music, maps) are logged and
+  done without. The map editor reports failures in its status line.
+* A cancelled sleep ends the loop it is in.
 
 ## Milestones
 

@@ -7,6 +7,7 @@
 //! completely every frame.
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const Assets = @import("assets.zig").Assets;
@@ -493,7 +494,7 @@ pub const Hud = struct {
         const w: i32 = @intFromFloat(@as(f64, @floatFromInt(bar.width())) * fraction);
         if (w > 0) cv.drawPart(bar, .{ .x = 0, .y = 0, .w = w, .h = bar.height() }, 132, y);
         var buf: [16]u8 = undefined;
-        const text = std.fmt.bufPrint(&buf, "{d}", .{units}) catch return;
+        const text = fit(&buf, "{d}", .{units});
         h.fonts.get(.small_white).draw(cv, text, 132 + 3, y + 5);
     }
 
@@ -505,9 +506,9 @@ pub const Hud = struct {
         var buf: [8]u8 = undefined;
         const x = off[0] + side_x;
         const y = off[1] + 9;
-        f.draw(cv, if (hours <= 9) std.fmt.bufPrint(&buf, "{d}", .{hours}) catch "" else "!", x + 38, y);
-        f.draw(cv, std.fmt.bufPrint(&buf, "{d:0>2}", .{(total / 60) % 60}) catch "", x + 52, y);
-        f.draw(cv, std.fmt.bufPrint(&buf, "{d:0>2}", .{total % 60}) catch "", x + 75, y);
+        f.draw(cv, if (hours <= 9) fit(&buf, "{d}", .{hours}) else "!", x + 38, y);
+        f.draw(cv, fit(&buf, "{d:0>2}", .{(total / 60) % 60}), x + 52, y);
+        f.draw(cv, fit(&buf, "{d:0>2}", .{total % 60}), x + 75, y);
     }
 
     fn drawSelected(h: *const Hud, cv: gfx.Canvas, v: View, off: [2]i32) void {
@@ -534,7 +535,7 @@ pub const Hud = struct {
         if (o.canHaveGrenades()) {
             cv.draw(m.grenade[@intFromEnum(o.owner)], off[0] + 575, off[1] + 185);
             var buf: [8]u8 = undefined;
-            const text = std.fmt.bufPrint(&buf, "{d:0>2}", .{@as(u32, @intCast(@max(o.grenades, 0)))}) catch "";
+            const text = fit(&buf, "{d:0>2}", .{@as(u32, @intCast(@max(o.grenades, 0)))});
             h.fonts.get(.big_white).draw(cv, text, off[0] + 600, off[1] + 187);
         }
 
@@ -593,7 +594,7 @@ pub const Hud = struct {
         cv.fill(area, .{ .r = 115, .g = 115, .b = 115 });
         const text = typing orelse return;
         var buf: [256]u8 = undefined;
-        const line = std.fmt.bufPrint(&buf, "Say:: {s}", .{text}) catch return;
+        const line = fit(&buf, "Say:: {s}", .{text});
         const f = h.fonts.get(.small_white);
         const inner = area.w - 6;
         if (inner <= 0) return;

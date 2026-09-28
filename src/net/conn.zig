@@ -6,6 +6,7 @@
 //! sends never lose or corrupt messages.
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const builtin = @import("builtin");
 const protocol = @import("protocol.zig");
 const c = std.c;
@@ -46,7 +47,7 @@ pub const Conn = struct {
         disableSigpipe(fd);
         var conn: Conn = .{ .fd = fd };
         const ip: [4]u8 = @bitCast(addr.addr);
-        _ = std.fmt.bufPrint(&conn.address, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch unreachable;
+        _ = fit(&conn.address, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] });
         return conn;
     }
 

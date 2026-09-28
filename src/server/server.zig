@@ -11,6 +11,7 @@
 //! * bots are Zig bots run by the server itself (see `bots.zig`).
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const game = @import("../game.zig");
 const net = @import("../net.zig");
 const commands = @import("commands.zig");
@@ -275,7 +276,7 @@ pub const Server = struct {
             // Write out the defaults for people to edit.
             var buf: std.Io.Writer.Allocating = .init(s.gpa);
             defer buf.deinit();
-            Settings.defaults.write(&buf.writer) catch {};
+            try Settings.defaults.write(&buf.writer);
             s.writeFile(path, buf.written());
         } else {
             std.log.warn("could not read settings '{s}', using defaults", .{path});
@@ -288,7 +289,7 @@ pub const Server = struct {
             } else |_| {
                 var buf: std.Io.Writer.Allocating = .init(s.gpa);
                 defer buf.deinit();
-                s.server_settings.write(&buf.writer) catch {};
+                try s.server_settings.write(&buf.writer);
                 s.writeFile(p, buf.written());
             }
         }
@@ -331,7 +332,10 @@ pub const Server = struct {
     }
 
     fn findMaps(s: *Server) !void {
-        var dir = s.data.openDir(s.io, ".", .{ .iterate = true }) catch return;
+        var dir = s.data.openDir(s.io, ".", .{ .iterate = true }) catch |err| {
+            std.log.warn("could not look for maps: {t}", .{err});
+            return;
+        };
         defer dir.close(s.io);
         var it = dir.iterate();
         while (it.next(s.io) catch null) |entry| {
@@ -658,7 +662,7 @@ pub const Server = struct {
                 if (text.len == 0) return;
                 if (text[0] == '/') return commands.run(s, p, text[1..]);
                 var buf: [600]u8 = undefined;
-                const line = std.fmt.bufPrint(&buf, "{s}:: {s}", .{ p.name.items, text }) catch return;
+                const line = fit(&buf, "{s}:: {s}", .{ p.name.items, text });
                 const c = teamColor(p.team);
                 try w.news(.all, line, .{ .r = @intCast(c[0] * 3 / 10), .g = @intCast(c[1] * 3 / 10), .b = @intCast(c[2] * 3 / 10) });
             },
@@ -673,7 +677,7 @@ pub const Server = struct {
                 const v = protocol.decode(protocol.StartBuilding, data) orelse return;
                 const o = s.ownBuilding(p, v.ref_id) orelse return;
                 if (try s.denied(p, "start production")) return;
-                if (w.setProduction(o, unitOf(v.ot, v.oid) orelse return)) {
+                if (try w.setProduction(o, unitOf(v.ot, v.oid) orelse return)) {
                     try w.relayBuildingState(o, .all);
                     try s.sendPacket(me, .comp_msg, protocol.ComputerMsg{ .ref_id = o.ref_id, .sound = @intFromEnum(protocol.CompSound.starting_manufacture) });
                 }
@@ -693,8 +697,8 @@ pub const Server = struct {
                 if (try s.denied(p, "add queue")) return;
                 const u = unitOf(v.ot, v.oid) orelse return;
                 if (o.building().?.unit == null) {
-                    if (w.setProduction(o, u)) try w.relayBuildingState(o, .all);
-                } else if (w.addToQueue(o, u, false)) {
+                    if (try w.setProduction(o, u)) try w.relayBuildingState(o, .all);
+                } else if (try w.addToQueue(o, u, false)) {
                     try w.relayQueue(o, .all);
                 }
             },
@@ -878,7 +882,7 @@ pub const Server = struct {
     fn voteDescription(s: *const Server, buf: []u8, kind: VoteType, value: i32) []const u8 {
         return switch (kind) {
             .change_map => if (value >= 0 and value < s.selectable_maps.items.len)
-                std.fmt.bufPrint(buf, "{d}. {s}", .{ value, s.selectable_maps.items[@intCast(value)] }) catch ""
+                fit(buf, "{d}. {s}", .{ value, s.selectable_maps.items[@intCast(value)] })
             else
                 "",
             .start_bot, .stop_bot => if (value >= 0 and value < k.Team.count) @as(k.Team, @enumFromInt(value)).name() else "",
@@ -1201,7 +1205,7 @@ test "a client connects, gets the map and objects, and orders units" {
     for (0..100) |_| {
         try s.tick();
         try client.poll();
-        io.sleep(.fromMilliseconds(5), .awake) catch {};
+        try io.sleep(.fromMilliseconds(5), .awake);
     }
     try testing.expect(!s.world.clock.paused);
     try testing.expect(client.count(.send_waypoints) >= 1);

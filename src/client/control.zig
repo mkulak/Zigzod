@@ -3,6 +3,7 @@
 //! mouse is over, giving orders, and drawing selections and routes.
 
 const std = @import("std");
+const fit = @import("../text.zig").fit;
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const font = @import("font.zig");
@@ -105,25 +106,25 @@ pub const Control = struct {
     }
 
     /// Remember something the space bar can jump to.
-    pub fn notice(c: *Control, n: Notice) void {
+    pub fn notice(c: *Control, n: Notice) std.mem.Allocator.Error!void {
         var i: usize = 0;
         while (i < c.notices.items.len) {
             if (c.notices.items[i].same(n)) _ = c.notices.orderedRemove(i) else i += 1;
         }
-        c.notices.insert(c.gpa, 0, n) catch return;
+        try c.notices.insert(c.gpa, 0, n);
         if (c.notices.items.len > Notice.max) c.notices.shrinkRetainingCapacity(Notice.max);
     }
 
     /// The next notice to look at (it goes to the back of the list);
     /// stale ones are dropped. `real_time` is the notices' clock.
-    pub fn nextNotice(c: *Control, world: *const World, real_time: f64, rng: std.Random) ?struct { obj: *Object, open_gui: bool } {
+    pub fn nextNotice(c: *Control, world: *const World, real_time: f64, rng: std.Random) std.mem.Allocator.Error!?struct { obj: *Object, open_gui: bool } {
         while (c.notices.items.len > 0) {
             const n = c.notices.orderedRemove(0);
             const obj = world.find(n.id) orelse continue;
             if (real_time > n.time + Notice.lifetime) continue;
             const o = world.findOpt(obj.leader) orelse obj;
-            if (n.select and !c.isSelected(o.ref_id)) c.select(world, o.ref_id, rng);
-            c.notices.append(c.gpa, n) catch {};
+            if (n.select and !c.isSelected(o.ref_id)) try c.select(world, o.ref_id, rng);
+            try c.notices.append(c.gpa, n);
             return .{ .obj = o, .open_gui = n.open_gui };
         }
         return null;
@@ -197,19 +198,19 @@ pub const Control = struct {
     }
 
     /// Select one object (its group's leader if it follows one).
-    pub fn select(c: *Control, world: *const World, id: i32, rng: std.Random) void {
+    pub fn select(c: *Control, world: *const World, id: i32, rng: std.Random) std.mem.Allocator.Error!void {
         var o = world.find(id) orelse return;
         if (world.findOpt(o.leader)) |l| o = l;
         if (!c.selectable(o)) return;
         c.dropPendingOfSelected();
         c.selected.clearRetainingCapacity();
-        c.selected.append(c.gpa, o.ref_id) catch return;
+        try c.selected.append(c.gpa, o.ref_id);
         c.selectionChanged(world, rng);
     }
 
     /// The units in the box between two map points; a click (a tiny box)
     /// picks one unit there, or its leader (CollectSelectables).
-    pub fn selectBox(c: *Control, world: *const World, x0: i32, y0: i32, x1: i32, y1: i32, rng: std.Random) void {
+    pub fn selectBox(c: *Control, world: *const World, x0: i32, y0: i32, x1: i32, y1: i32, rng: std.Random) std.mem.Allocator.Error!void {
         const left = @min(x0, x1);
         const right = @max(x0, x1);
         const top = @min(y0, y1);
@@ -222,7 +223,7 @@ pub const Control = struct {
             if (!obj.withinSelection(left, right, top, bottom)) continue;
             const o = if (single) world.findOpt(obj.leader) orelse obj else obj;
             if (!c.selectable(o) or c.isSelected(o.ref_id)) continue;
-            c.selected.append(c.gpa, o.ref_id) catch break;
+            try c.selected.append(c.gpa, o.ref_id);
         }
         if (single and c.selected.items.len > 1) {
             // Several overlap: take one of them.
@@ -243,7 +244,7 @@ pub const Control = struct {
     }
 
     /// All our units of a kind (robots and vehicles for null).
-    pub fn selectAll(c: *Control, world: *const World, kind: ?UnitKind, rng: std.Random) void {
+    pub fn selectAll(c: *Control, world: *const World, kind: ?UnitKind, rng: std.Random) std.mem.Allocator.Error!void {
         c.dropPendingOfSelected();
         c.selected.clearRetainingCapacity();
         for (world.objects.items) |o| {
@@ -252,7 +253,7 @@ pub const Control = struct {
                 if (uk != want) continue;
             } else if (uk == .cannon) continue;
             if (!c.selectable(o)) continue;
-            c.selected.append(c.gpa, o.ref_id) catch break;
+            try c.selected.append(c.gpa, o.ref_id);
         }
         c.selectionChanged(world, rng);
     }
@@ -260,7 +261,7 @@ pub const Control = struct {
     /// Select the next unit of a kind; the first time (or after a pause)
     /// the one nearest to (x, y). Returns it to look at
     /// (OrderlySelectUnitType).
-    pub fn selectNext(c: *Control, world: *const World, kind: UnitKind, x: i32, y: i32, real_time: f64, rng: std.Random) ?*Object {
+    pub fn selectNext(c: *Control, world: *const World, kind: UnitKind, x: i32, y: i32, real_time: f64, rng: std.Random) std.mem.Allocator.Error!?*Object {
         if (c.team == .none) return null;
         const cy = &c.cycle[@intFromEnum(kind)];
         var choice: ?*Object = null;
@@ -285,21 +286,21 @@ pub const Control = struct {
             }
         }
         const o = choice orelse return null;
-        c.select(world, o.ref_id, rng);
+        try c.select(world, o.ref_id, rng);
         cy.last = o.ref_id;
         cy.time = real_time;
         return o;
     }
 
     /// Ctrl+number: remember the selection as a group.
-    pub fn setGroup(c: *Control, n: usize) void {
+    pub fn setGroup(c: *Control, n: usize) std.mem.Allocator.Error!void {
         c.groups[n].clearRetainingCapacity();
-        c.groups[n].appendSlice(c.gpa, c.selected.items) catch {};
+        try c.groups[n].appendSlice(c.gpa, c.selected.items);
     }
 
     /// Number: select the group; if it already is selected, return where
     /// it is to look there (LoadControlGroup).
-    pub fn loadGroup(c: *Control, world: *const World, n: usize, rng: std.Random) ?[2]i32 {
+    pub fn loadGroup(c: *Control, world: *const World, n: usize, rng: std.Random) std.mem.Allocator.Error!?[2]i32 {
         const g = c.groups[n].items;
         if (g.len > 0 and std.mem.eql(i32, g, c.selected.items)) {
             var sx: i64 = 0;
@@ -315,7 +316,7 @@ pub const Control = struct {
         }
         c.dropPendingOfSelected();
         c.selected.clearRetainingCapacity();
-        c.selected.appendSlice(c.gpa, g) catch {};
+        try c.selected.appendSlice(c.gpa, g);
         c.selectionChanged(world, rng);
         return null;
     }
@@ -432,11 +433,11 @@ pub const Control = struct {
 
     /// Right click at map point (x, y): add an order for every selected
     /// unit, depending on what is there (AddDevWayPointToSelected).
-    pub fn addOrder(c: *Control, world: *const World, x: i32, y: i32, opt: OrderOptions) void {
+    pub fn addOrder(c: *Control, world: *const World, x: i32, y: i32, opt: OrderOptions) std.mem.Allocator.Error!void {
         if (c.selected.items.len == 0) if (c.rally_for) |id| {
-            const gop = c.pending.getOrPut(c.gpa, id) catch return;
+            const gop = try c.pending.getOrPut(c.gpa, id);
             if (!gop.found_existing) gop.value_ptr.* = .empty;
-            gop.value_ptr.append(c.gpa, .{ .mode = .move, .ref_id = -1, .x = x, .y = y, .attack_to = true, .player_given = true }) catch {};
+            try gop.value_ptr.append(c.gpa, .{ .mode = .move, .ref_id = -1, .x = x, .y = y, .attack_to = true, .player_given = true });
             return;
         };
         const target = if (opt.from_minimap) null else if (c.hover) |h| world.find(h.id) else null;
@@ -450,9 +451,9 @@ pub const Control = struct {
                 wp.ref_id = t.ref_id;
                 orderAt(c, o, t, &wp);
             }
-            const gop = c.pending.getOrPut(c.gpa, id) catch continue;
+            const gop = try c.pending.getOrPut(c.gpa, id);
             if (!gop.found_existing) gop.value_ptr.* = .empty;
-            gop.value_ptr.append(c.gpa, wp) catch {};
+            try gop.value_ptr.append(c.gpa, wp);
         }
     }
 
@@ -656,7 +657,7 @@ pub const Control = struct {
             brackets(cv, .{ .x = o.x, .y = o.y, .w = o.width_pix, .h = o.height_pix }, col);
             if (c.groupOf(id)) |g| {
                 var buf: [2]u8 = undefined;
-                fonts.get(.small_white).draw(cv, std.fmt.bufPrint(&buf, "{d}", .{g}) catch "", o.x - 2, o.y - 3);
+                fonts.get(.small_white).draw(cv, fit(&buf, "{d}", .{g}), o.x - 2, o.y - 3);
             }
             healthBar(cv, o);
             c.attackRange(cv, world, o, col, time);
@@ -766,27 +767,27 @@ test "select, group and order" {
     c.reset(.red);
 
     // A click on a unit selects it; a box both.
-    c.selectBox(&world, 105, 105, 105, 105, rng);
+    try c.selectBox(&world, 105, 105, 105, 105, rng);
     try std.testing.expectEqualSlices(i32, &.{a.ref_id}, c.selected.items);
-    c.selectBox(&world, 90, 90, 200, 130, rng);
+    try c.selectBox(&world, 90, 90, 200, 130, rng);
     try std.testing.expectEqual(2, c.selected.items.len);
     try std.testing.expect(c.abilities.can_move and c.abilities.can_attack);
     // Enemies are never selected.
-    c.selectBox(&world, 0, 0, 500, 500, rng);
+    try c.selectBox(&world, 0, 0, 500, 500, rng);
     try std.testing.expect(!c.isSelected(enemy.ref_id));
 
-    c.setGroup(3);
+    try c.setGroup(3);
     c.clear(&world, rng);
-    try std.testing.expect(c.loadGroup(&world, 3, rng) == null);
+    try std.testing.expect(try c.loadGroup(&world, 3, rng) == null);
     try std.testing.expectEqual(2, c.selected.items.len);
     // Pressing the number again: look at the group.
-    const center = c.loadGroup(&world, 3, rng).?;
+    const center = (try c.loadGroup(&world, 3, rng)).?;
     try std.testing.expectEqual(a.center_x + 20, center[0]);
 
     // Pointing at the enemy: attack cursor and attack orders.
     c.updateHover(&world, enemy.x + 2, enemy.y + 2);
     try std.testing.expectEqual(cursor.Kind.attack, c.cursorKind(&world, false));
-    c.addOrder(&world, enemy.x + 2, enemy.y + 2, .{});
+    try c.addOrder(&world, enemy.x + 2, enemy.y + 2, .{});
     const wp = c.pending.get(b.ref_id).?.items[0];
     try std.testing.expectEqual(protocol.WaypointMode.attack, wp.mode);
     try std.testing.expectEqual(enemy.ref_id, wp.ref_id);

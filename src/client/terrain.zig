@@ -206,9 +206,9 @@ pub const Terrain = struct {
 
     /// Draw the visible part of the map. `cv` maps map coordinates to the
     /// screen; `view` is the visible map area.
-    pub fn draw(t: *Terrain, cv: gfx.Canvas, view: gfx.Rect, time: f64, zones: []const mapfmt.Zone, rng: std.Random) void {
+    pub fn draw(t: *Terrain, cv: gfx.Canvas, view: gfx.Rect, time: f64, zones: []const mapfmt.Zone, rng: std.Random) std.mem.Allocator.Error!void {
         cv.drawPart(t.ground, view, view.x, view.y);
-        t.animate(cv, view, time, rng);
+        try t.animate(cv, view, time, rng);
         for (t.markers.items) |*mk| {
             const owner = if (mk.zone < zones.len) zones[mk.zone].owner else .none;
             const images = if (mk.water) &t.sheets.zone_marker_water else &t.sheets.zone_marker;
@@ -227,7 +227,7 @@ pub const Terrain = struct {
         }
     }
 
-    fn animate(t: *Terrain, cv: gfx.Canvas, view: gfx.Rect, time: f64, rng: std.Random) void {
+    fn animate(t: *Terrain, cv: gfx.Canvas, view: gfx.Rect, time: f64, rng: std.Random) std.mem.Allocator.Error!void {
         const interval: f64 = switch (t.planet) {
             .volcanic => 0.5,
             .arctic => 0.4,
@@ -260,7 +260,7 @@ pub const Terrain = struct {
             wt.next_time = time + interval + @as(f64, @floatFromInt(rng.uintLessThan(u32, 4))) * 0.033;
             if (t.palette[t.tiles[wt.tile]].is_effect) continue;
             if (rng.uintLessThan(u32, 40) != 0) continue;
-            t.animating.append(t.gpa, .{ .tile = wt.tile }) catch return;
+            try t.animating.append(t.gpa, .{ .tile = wt.tile });
             t.tiles[wt.tile] = t.ripple_tiles.items[rng.uintLessThan(usize, t.ripple_tiles.items.len)];
         }
     }
@@ -391,6 +391,6 @@ test "render a map and animate it" {
     const view = gfx.Rect{ .x = 100, .y = 50, .w = 540, .h = 444 };
     const cv: gfx.Canvas = .{ .target = screen, .clip = .{ .x = 0, .y = 0, .w = 540, .h = 444 }, .dx = -view.x, .dy = -view.y };
     var time: f64 = 0;
-    while (time < 5) : (time += 0.05) t.draw(cv, view, time, &zones, prng.random());
+    while (time < 5) : (time += 0.05) try t.draw(cv, view, time, &zones, prng.random());
     try std.testing.expectEqual(t.ground.pixel(100, 50), screen.pixel(0, 0));
 }

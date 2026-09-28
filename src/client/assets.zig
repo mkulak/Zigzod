@@ -69,7 +69,7 @@ fn expand(buf: []u8, comptime pattern: []const u8, vars: Vars) []const u8 {
     var i: usize = 0;
     while (i < pattern.len) {
         if (pattern[i] != '{') {
-            w.writeByte(pattern[i]) catch unreachable;
+            w.writeByte(pattern[i]) catch Assets.tooLong();
             i += 1;
             continue;
         }
@@ -82,7 +82,7 @@ fn expand(buf: []u8, comptime pattern: []const u8, vars: Vars) []const u8 {
             .angle => w.print("{d:0>3}", .{angle(v)}),
             .frame => w.print("{d:0>2}", .{v}),
             .n => w.print("{d}", .{v}),
-        }) catch unreachable;
+        }) catch Assets.tooLong();
         i = close + 1;
     }
     return w.buffered();
@@ -141,7 +141,7 @@ pub const Assets = struct {
         return buf[0 .. head.len + tail.len :0];
     }
 
-    fn tooLong() noreturn {
+    pub fn tooLong() noreturn {
         // Only an absurdly long assets folder gets here.
         std.debug.panic("asset path too long", .{});
     }

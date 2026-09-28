@@ -220,7 +220,7 @@ pub const App = struct {
         try app.handleSessionEvents();
         app.updateCamera(now - app.last_frame);
         app.last_frame = now;
-        app.render(now);
+        try app.render(now);
         if (!app.session.connected()) {
             std.log.err("disconnected from the server", .{});
             return false;
@@ -248,7 +248,7 @@ pub const App = struct {
                 app.placing = null;
                 app.control.reset(app.session.team);
                 app.objects.our_team = app.session.team;
-                app.objects.setMap(m, app.terrain_info) catch {};
+                try app.objects.setMap(m, app.terrain_info);
             },
             .deleted_object => |id| {
                 app.objects.remove(id);
@@ -263,11 +263,11 @@ pub const App = struct {
                 // (Repair messages are voiced with the repair animation.)
                 const voiced = snd != .starting_repair and snd != .vehicle_repaired;
                 if (voiced and idx >= 0 and idx < @typeInfo(sound.Computer).@"enum".fields.len) app.sounds.announce(@enumFromInt(idx), app.realTime(), app.prng.random());
-                app.compMsg(m, snd);
+                try app.compMsg(m, snd);
             },
             .portrait_anim => |pa| if (app.session.find(pa.ref_id)) |o| {
                 if (o.owner == app.control.team) {
-                    app.control.notice(.{ .id = pa.ref_id, .select = true, .time = app.realTime() });
+                    try app.control.notice(.{ .id = pa.ref_id, .select = true, .time = app.realTime() });
                     if (pa.anim_id >= 0 and pa.anim_id < @typeInfo(portrait.Anim).@"enum".fields.len) app.hud.speak(o, @enumFromInt(pa.anim_id), app.realTime());
                 }
             },
@@ -280,7 +280,7 @@ pub const App = struct {
             .attacked => |a| if (app.session.find(a.target)) |t| {
                 if (t.owner == app.session.team and t.owner != .none and app.hud.alert == null) {
                     app.hud.attacked(t, app.session.world.now(), app.realTime(), app.prng.random());
-                    if (app.hud.alert != null) app.control.notice(.{ .id = a.target, .select = true, .time = app.realTime() });
+                    if (app.hud.alert != null) try app.control.notice(.{ .id = a.target, .select = true, .time = app.realTime() });
                 }
             },
             .driver_hit => |id| if (app.session.find(id)) |o| app.objects.driverHit(o),
@@ -288,7 +288,7 @@ pub const App = struct {
             .pickup_grenades => |id| if (app.session.find(id)) |o| {
                 app.objects.pickupGrenades(o);
                 if (o.owner == app.control.team) {
-                    app.control.notice(.{ .id = id, .select = true, .time = app.realTime() });
+                    try app.control.notice(.{ .id = id, .select = true, .time = app.realTime() });
                     app.hud.speak(o, .grenades_collected, app.realTime());
                 }
             },
@@ -319,7 +319,7 @@ pub const App = struct {
             },
             .news => |n| {
                 std.log.info("news: {s}", .{n.text});
-                app.news.add(n.text, .{ .r = n.color[0], .g = n.color[1], .b = n.color[2] }, app.realTime());
+                try app.news.add(n.text, .{ .r = n.color[0], .g = n.color[1], .b = n.color[2] }, app.realTime());
             },
             else => {},
         };
@@ -468,7 +468,7 @@ pub const App = struct {
                         .map => |p| app.centerOn(p[0], p[1]),
                         .jump => |id| if (world.find(id)) |o| {
                             app.lookAt(o.center_x, o.center_y);
-                            if (!app.control.isSelected(id)) app.control.select(world, id, rng);
+                            if (!app.control.isSelected(id)) try app.control.select(world, id, rng);
                         },
                         else => {},
                     }
@@ -492,7 +492,7 @@ pub const App = struct {
                         .resume_game => try app.session.sendPacket(.set_game_paused, net.protocol.GamePaused{ .game_paused = false }),
                         .select, .open, .look => |id| if (world.find(id)) |o| {
                             app.lookAt(o.center_x, o.center_y);
-                            if (cl == .select) app.control.select(world, id, rng);
+                            if (cl == .select) try app.control.select(world, id, rng);
                             if (cl == .open) _ = app.openWindow(o);
                         },
                     }
@@ -540,7 +540,7 @@ pub const App = struct {
                 if (app.left_on_hud) {
                     app.left_on_hud = false;
                     switch (app.hud.release(app.width, app.height, app.mouse_x, app.mouse_y)) {
-                        .button => |b| app.hudButton(b),
+                        .button => |b| try app.hudButton(b),
                         else => {},
                     }
                     return;
@@ -572,7 +572,7 @@ pub const App = struct {
                 const start = app.drag orelse return;
                 app.drag = null;
                 const p = app.mouseMap();
-                app.control.selectBox(world, start[0], start[1], p[0], p[1], rng);
+                try app.control.selectBox(world, start[0], start[1], p[0], p[1], rng);
             },
             c.SDL_BUTTON_RIGHT => try app.order(),
             c.SDL_BUTTON_MIDDLE => app.middle = null,
@@ -587,7 +587,7 @@ pub const App = struct {
         const minimap = app.hud.minimapSpot(app.width, app.height, app.mouse_x, app.mouse_y);
         if (minimap == null and !app.overMap(app.mouse_x, app.mouse_y)) return;
         const at = minimap orelse app.mouseMap();
-        app.control.addOrder(world, at[0], at[1], .{ .from_minimap = minimap != null, .attack_to = app.keys.ctrl, .no_attack_to = app.keys.alt });
+        try app.control.addOrder(world, at[0], at[1], .{ .from_minimap = minimap != null, .attack_to = app.keys.ctrl, .no_attack_to = app.keys.alt });
         if (app.keys.shift) return;
         // Clicking a lone APC or cannon lets its drivers out.
         if (app.control.selected.items.len == 1 and minimap == null) {
@@ -670,22 +670,22 @@ pub const App = struct {
                 app.volume = v;
                 app.sounds.setVolume(v);
                 const names = [_][]const u8{ "volume off", "volume 25%", "volume 50%", "volume 75%", "volume full" };
-                app.news.add(names[@min(v, 4)], .{ .r = 0, .g = 0, .b = 0 }, app.realTime());
+                try app.news.add(names[@min(v, 4)], .{ .r = 0, .g = 0, .b = 0 }, app.realTime());
             },
         }
     }
 
-    fn compMsg(app: *App, m: net.protocol.ComputerMsg, snd: net.protocol.CompSound) void {
+    fn compMsg(app: *App, m: net.protocol.ComputerMsg, snd: net.protocol.CompSound) !void {
         switch (snd) {
             .vehicle, .robot => |which| {
-                app.control.notice(.{ .id = m.ref_id, .select = true, .time = app.realTime() });
+                try app.control.notice(.{ .id = m.ref_id, .select = true, .time = app.realTime() });
                 app.notices.show(if (which == .robot) .robot_manufactured else .vehicle_manufactured, m.ref_id, app.realTime());
             },
             .gun => {
-                app.control.notice(.{ .id = m.ref_id, .open_gui = true, .time = app.realTime() });
+                try app.control.notice(.{ .id = m.ref_id, .open_gui = true, .time = app.realTime() });
                 app.notices.show(.gun_manufactured, m.ref_id, app.realTime());
             },
-            .vehicle_repaired => app.control.notice(.{ .id = m.ref_id, .time = app.realTime() }),
+            .vehicle_repaired => try app.control.notice(.{ .id = m.ref_id, .time = app.realTime() }),
             else => {},
         }
     }
@@ -696,7 +696,7 @@ pub const App = struct {
         app.hud.portrait.play(portrait.acknowledgeAnim(sent.no_way, app.prng.random()), app.realTime());
     }
 
-    fn hudButton(app: *App, b: hud_mod.Button) void {
+    fn hudButton(app: *App, b: hud_mod.Button) !void {
         const kind: @import("control.zig").UnitKind = switch (b) {
             .r => .robot,
             .v => .vehicle,
@@ -708,12 +708,12 @@ pub const App = struct {
             .menu => return app.menus.show(.main, false),
             else => return,
         };
-        app.selectNext(kind);
+        try app.selectNext(kind);
     }
 
-    fn selectNext(app: *App, kind: @import("control.zig").UnitKind) void {
+    fn selectNext(app: *App, kind: @import("control.zig").UnitKind) !void {
         const p = app.mouseMap();
-        if (app.control.selectNext(&app.session.world, kind, p[0], p[1], app.realTime(), app.prng.random())) |o| {
+        if (try app.control.selectNext(&app.session.world, kind, p[0], p[1], app.realTime(), app.prng.random())) |o| {
             app.lookAt(o.center_x, o.center_y);
         }
     }
@@ -754,8 +754,8 @@ pub const App = struct {
         if (key >= c.SDLK_0 and key <= c.SDLK_9) {
             const n: usize = key - c.SDLK_0;
             if (app.keys.ctrl) {
-                app.control.setGroup(n);
-            } else if (app.control.loadGroup(&app.session.world, n, app.prng.random())) |p| app.lookAt(p[0], p[1]);
+                try app.control.setGroup(n);
+            } else if (try app.control.loadGroup(&app.session.world, n, app.prng.random())) |p| app.lookAt(p[0], p[1]);
             return;
         }
         try app.hotkey(key);
@@ -785,17 +785,17 @@ pub const App = struct {
         const rng = app.prng.random();
         const ctrl = app.keys.ctrl;
         switch (key) {
-            c.SDLK_RETURN, c.SDLK_KP_ENTER => app.startChat(""),
-            c.SDLK_SLASH => app.startChat("/"),
-            c.SDLK_R => if (ctrl) app.control.selectAll(world, .robot, rng) else app.selectNext(.robot),
-            c.SDLK_V => if (ctrl) app.control.selectAll(world, .vehicle, rng) else if (!app.keys.alt) app.selectNext(.vehicle),
-            c.SDLK_G => app.selectNext(.cannon),
-            c.SDLK_C => if (ctrl) app.control.selectAll(world, .cannon, rng),
-            c.SDLK_A => if (ctrl) app.control.selectAll(world, null, rng),
+            c.SDLK_RETURN, c.SDLK_KP_ENTER => try app.startChat(""),
+            c.SDLK_SLASH => try app.startChat("/"),
+            c.SDLK_R => if (ctrl) try app.control.selectAll(world, .robot, rng) else try app.selectNext(.robot),
+            c.SDLK_V => if (ctrl) try app.control.selectAll(world, .vehicle, rng) else if (!app.keys.alt) try app.selectNext(.vehicle),
+            c.SDLK_G => try app.selectNext(.cannon),
+            c.SDLK_C => if (ctrl) try app.control.selectAll(world, .cannon, rng),
+            c.SDLK_A => if (ctrl) try app.control.selectAll(world, null, rng),
             c.SDLK_B => app.factory_list.shown = !app.factory_list.shown,
             c.SDLK_H => app.news.history = !app.news.history,
             c.SDLK_P => app.menus.show(.player_list, true),
-            c.SDLK_SPACE => if (app.control.nextNotice(world, app.realTime(), rng)) |n| {
+            c.SDLK_SPACE => if (try app.control.nextNotice(world, app.realTime(), rng)) |n| {
                 app.lookAt(n.obj.center_x, n.obj.center_y);
                 if (n.open_gui) _ = app.openWindow(n.obj);
             },
@@ -803,10 +803,10 @@ pub const App = struct {
         }
     }
 
-    fn startChat(app: *App, text: []const u8) void {
+    fn startChat(app: *App, text: []const u8) !void {
         if (app.chat != null) return;
         app.chat = .empty;
-        app.chat.?.appendSlice(app.gpa, text) catch {};
+        try app.chat.?.appendSlice(app.gpa, text);
         app.display.textInput(true);
     }
 
@@ -829,7 +829,7 @@ pub const App = struct {
 
     /// Sounds of this frame: effects on screen, faces talking, building
     /// loops, music and spoken warnings.
-    fn playSounds(app: *App, world: *const game.world.World, v: gfx.Rect, now: f64) void {
+    fn playSounds(app: *App, world: *const game.world.World, v: gfx.Rect, now: f64) !void {
         const rng = app.prng.random();
         for (app.fx.sounds.items) |h| {
             const r = h.where;
@@ -883,12 +883,12 @@ pub const App = struct {
         };
         app.sounds.music.update(danger, if (fort) |f| f.isDestroyed() else false, now, rng);
         app.sounds.pump();
-        app.speakWarnings(world, fort, now);
+        try app.speakWarnings(world, fort, now);
     }
 
     /// "Fort under attack" while the music says so, and "you're losing"
     /// when well behind in units and land (ProcessVerbalWarnings).
-    fn speakWarnings(app: *App, world: *const game.world.World, fort: ?*const Object, now: f64) void {
+    fn speakWarnings(app: *App, world: *const game.world.World, fort: ?*const Object, now: f64) !void {
         const team = app.control.team;
         if (team == .none) return;
         var units: [k.Team.count]u32 = @splat(0);
@@ -901,7 +901,7 @@ pub const App = struct {
             app.next_fort_warning = now + 10;
             app.sounds.announce(.fort_under_attack, now, rng);
             app.notices.show(.fort_under_attack, f.ref_id, now);
-            app.control.notice(.{ .id = f.ref_id, .time = now });
+            try app.control.notice(.{ .id = f.ref_id, .time = now });
         };
         if (now < app.next_losing_warning) return;
         var zones: [k.Team.count]u32 = @splat(0);
@@ -969,7 +969,7 @@ pub const App = struct {
         cv.drawAlpha(img, tx * k.tile_size, ty * k.tile_size, if (ok) 255 else 110);
     }
 
-    fn render(app: *App, now: f64) void {
+    fn render(app: *App, now: f64) !void {
         const black: gfx.Color = .{ .r = 0, .g = 0, .b = 0 };
         app.display.frame.fill(null, black);
         const area = app.mapArea();
@@ -986,11 +986,11 @@ pub const App = struct {
             const time = world.now();
             app.objects.update(world, t, time);
             app.fx.update(.{ .time = time, .world = world, .terrain = t });
-            t.draw(cv, v, time, world.zones.items, app.prng.random());
+            try t.draw(cv, v, time, world.zones.items, app.prng.random());
             app.fx.drawGround(cv, v);
             app.objects.drawPre(cv, world, v);
             app.control.drawRoutes(cv, world, &app.cursors, time);
-            app.objects.draw(cv, world, v);
+            try app.objects.draw(cv, world, v);
             app.objects.drawAfter(cv, world, v);
             app.fx.draw(cv, v);
             app.control.drawSelection(cv, world, &app.assets.palettes, &app.fonts, time);
@@ -1005,7 +1005,7 @@ pub const App = struct {
                 const p = app.mouseMap();
                 drawSelectionBox(cv, &app.assets.palettes, app.control.team, d[0], d[1], p[0], p[1], time);
                 // The box selects as it grows.
-                app.control.selectBox(world, d[0], d[1], p[0], p[1], app.prng.random());
+                try app.control.selectBox(world, d[0], d[1], p[0], p[1], app.prng.random());
             }
 
             const screen_map: gfx.Canvas = .{ .target = app.display.frame, .clip = area };
@@ -1017,7 +1017,7 @@ pub const App = struct {
             app.hud.update(world, time, now, app.prng.random());
             // The HUD shows a new unit: it reports.
             if (app.control.hud_unit != app.hud.portrait.ref_id) app.hud.showUnit(world.findOpt(app.control.hud_unit), now, app.prng.random());
-            app.playSounds(world, v, now);
+            try app.playSounds(world, v, now);
             app.hud.draw(app.display.frame, .{
                 .world = world,
                 .team = app.session.team,
