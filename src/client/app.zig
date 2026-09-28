@@ -18,6 +18,7 @@ const windows = @import("windows.zig");
 const messages = @import("messages.zig");
 const portrait = @import("portrait.zig");
 const sound = @import("sound.zig");
+const Display = @import("display.zig").Display;
 const menus = @import("menus.zig");
 const Session = @import("session.zig").Session;
 
@@ -42,7 +43,8 @@ pub const App = struct {
     io: std.Io,
     assets: [:0]const u8,
     options: Options,
-    screen: gfx.Image,
+    display: Display,
+    /// The window's size (the frame's).
     width: i32,
     height: i32,
 
@@ -130,14 +132,8 @@ pub const App = struct {
             return err;
         };
 
-        if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) return error.SdlInitFailed;
-        errdefer c.SDL_Quit();
-        c.SDL_WM_SetCaption("Zod Engine", "Zod Engine");
-        _ = c.SDL_EnableUNICODE(1);
-        _ = c.SDL_EnableKeyRepeat(c.SDL_DEFAULT_REPEAT_DELAY, c.SDL_DEFAULT_REPEAT_INTERVAL);
-        var flags: u32 = c.SDL_SWSURFACE | c.SDL_RESIZABLE;
-        if (options.fullscreen) flags |= c.SDL_FULLSCREEN;
-        const surface: *c.SDL_Surface = c.SDL_SetVideoMode(options.width, options.height, 32, flags) orelse return error.SdlVideoFailed;
+        var display = try Display.open("Zod Engine", options.width, options.height, options.fullscreen);
+        errdefer display.close();
 
         const app = try gpa.create(App);
         errdefer gpa.destroy(app);
@@ -147,9 +143,9 @@ pub const App = struct {
             .io = io,
             .assets = assets,
             .options = options,
-            .screen = .{ .surface = surface },
-            .width = options.width,
-            .height = options.height,
+            .display = display,
+            .width = display.frame.w,
+            .height = display.frame.h,
             .terrain_info = terrain_info,
             .palettes = palettes,
             .sheets = undefined,
@@ -178,7 +174,6 @@ pub const App = struct {
         app.msg_images = .load(assets);
         app.menu_art = .load(assets, &app.palettes);
         app.sounds.init(assets);
-        _ = c.SDL_ShowCursor(c.SDL_DISABLE);
         app.sprites = try Sprites.load(gpa, assets, &app.palettes);
         app.fx = Effects.init(gpa, app.sprites, &app.palettes, app.prng.random());
         app.objects = Renderer.init(gpa, app.sprites, &app.fonts, &app.fx);
@@ -208,7 +203,7 @@ pub const App = struct {
         app.session.deinit();
         gpa.destroy(app.terrain_info);
         gpa.free(app.assets);
-        c.SDL_Quit();
+        app.display.close();
         gpa.destroy(app);
     }
 
@@ -416,21 +411,22 @@ pub const App = struct {
 
     fn handleEvents(app: *App) !void {
         var ev: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&ev) != 0) {
+        while (c.SDL_PollEvent(&ev)) {
             switch (ev.type) {
-                c.SDL_QUIT => app.quit = true,
-                c.SDL_VIDEORESIZE => {
-                    const surface: *c.SDL_Surface = c.SDL_SetVideoMode(ev.resize.w, ev.resize.h, 32, c.SDL_SWSURFACE | c.SDL_RESIZABLE) orelse continue;
-                    app.screen = .{ .surface = surface };
-                    app.width = ev.resize.w;
-                    app.height = ev.resize.h;
+                c.SDL_EVENT_QUIT => app.quit = true,
+                c.SDL_EVENT_WINDOW_RESIZED => {
+                    try app.display.resize(ev.window.data1, ev.window.data2);
+                    app.width = app.display.frame.w;
+                    app.height = app.display.frame.h;
                     app.clampView();
                 },
-                c.SDL_MOUSEMOTION => app.mouseMoved(ev.motion.x, ev.motion.y),
-                c.SDL_MOUSEBUTTONDOWN => try app.mouseDown(ev.button.button),
-                c.SDL_MOUSEBUTTONUP => try app.mouseUp(ev.button.button),
-                c.SDL_KEYDOWN => try app.keyDown(ev.key.keysym.sym, ev.key.keysym.unicode),
-                c.SDL_KEYUP => try app.keyUp(ev.key.keysym.sym),
+                c.SDL_EVENT_MOUSE_MOTION => app.mouseMoved(@intFromFloat(ev.motion.x), @intFromFloat(ev.motion.y)),
+                c.SDL_EVENT_MOUSE_BUTTON_DOWN => try app.mouseDown(ev.button.button),
+                c.SDL_EVENT_MOUSE_BUTTON_UP => try app.mouseUp(ev.button.button),
+                c.SDL_EVENT_MOUSE_WHEEL => if (ev.wheel.y != 0) app.wheel(ev.wheel.y > 0),
+                c.SDL_EVENT_KEY_DOWN => try app.keyDown(ev.key.key),
+                c.SDL_EVENT_KEY_UP => try app.keyUp(ev.key.key),
+                c.SDL_EVENT_TEXT_INPUT => try app.typed(std.mem.span(ev.text.text)),
                 else => {},
             }
         }
@@ -527,13 +523,13 @@ pub const App = struct {
                 app.drag = p;
             },
             c.SDL_BUTTON_MIDDLE => app.middle = .{ app.mouse_x, app.mouse_y },
-            c.SDL_BUTTON_WHEELUP, c.SDL_BUTTON_WHEELDOWN => {
-                const up = button == c.SDL_BUTTON_WHEELUP;
-                if (app.menus.wheel(app.menuContext(), up, app.mouse_x, app.mouse_y)) return;
-                if (app.window) |*w| w.wheel(world, up) else if (app.factory_list.shown) app.factory_list.scroll(!up);
-            },
             else => {},
         }
+    }
+
+    fn wheel(app: *App, up: bool) void {
+        if (app.menus.wheel(app.menuContext(), up, app.mouse_x, app.mouse_y)) return;
+        if (app.window) |*w| w.wheel(&app.session.world, up) else if (app.factory_list.shown) app.factory_list.scroll(!up);
     }
 
     fn mouseUp(app: *App, button: u8) !void {
@@ -730,8 +726,8 @@ pub const App = struct {
         }
     }
 
-    fn keyDown(app: *App, sym: c_uint, unicode: u16) !void {
-        switch (sym) {
+    fn keyDown(app: *App, key: c.SDL_Keycode) !void {
+        switch (key) {
             c.SDLK_LEFT => app.keys.left = true,
             c.SDLK_RIGHT => app.keys.right = true,
             c.SDLK_UP => app.keys.up = true,
@@ -740,9 +736,8 @@ pub const App = struct {
             c.SDLK_LCTRL, c.SDLK_RCTRL => app.keys.ctrl = true,
             c.SDLK_LALT, c.SDLK_RALT => app.keys.alt = true,
             c.SDLK_ESCAPE => {
-                if (app.chat) |*t| {
-                    t.deinit(app.gpa);
-                    app.chat = null;
+                if (app.chat != null) {
+                    app.endChat();
                 } else if (!app.menus.closeTop()) app.menus.show(.main, false);
                 return;
             },
@@ -751,20 +746,31 @@ pub const App = struct {
             c.SDLK_F3 => return app.session.send(.vote_pass, &.{}),
             else => {},
         }
-        if (sym == 'z' and app.chat == null) app.keys.z = true;
-        if (app.chat != null) return app.typeChat(unicode);
-        if (sym >= '0' and sym <= '9') {
-            const n: usize = sym - '0';
+        if (app.chat) |*text| {
+            // The characters come as text events.
+            switch (key) {
+                c.SDLK_RETURN, c.SDLK_KP_ENTER => {
+                    if (text.items.len > 0) try app.session.chat(text.items);
+                    app.endChat();
+                },
+                c.SDLK_BACKSPACE => _ = text.pop(),
+                else => {},
+            }
+            return;
+        }
+        if (key == c.SDLK_Z) app.keys.z = true;
+        if (key >= c.SDLK_0 and key <= c.SDLK_9) {
+            const n: usize = key - c.SDLK_0;
             if (app.keys.ctrl) {
                 app.control.setGroup(n);
             } else if (app.control.loadGroup(&app.session.world, n, app.prng.random())) |p| app.lookAt(p[0], p[1]);
             return;
         }
-        try app.hotkey(unicode);
+        try app.hotkey(key);
     }
 
-    fn keyUp(app: *App, sym: c_uint) !void {
-        switch (sym) {
+    fn keyUp(app: *App, key: c.SDL_Keycode) !void {
+        switch (key) {
             c.SDLK_LEFT => app.keys.left = false,
             c.SDLK_RIGHT => app.keys.right = false,
             c.SDLK_UP => app.keys.up = false,
@@ -776,33 +782,28 @@ pub const App = struct {
                 // Queued orders go out.
                 try app.sendOrders();
             },
-            'z' => app.keys.z = false,
+            c.SDLK_Z => app.keys.z = false,
             else => {},
         }
     }
 
-    /// Letters (ZPlayer::ProcessUnicode). Ctrl+letter comes as a control
-    /// character.
-    fn hotkey(app: *App, key: u16) !void {
+    /// Letter keys (ZPlayer::ProcessUnicode).
+    fn hotkey(app: *App, key: c.SDL_Keycode) !void {
         const world = &app.session.world;
         const rng = app.prng.random();
+        const ctrl = app.keys.ctrl;
         switch (key) {
-            '\r' => app.chat = .empty,
-            '/' => {
-                app.chat = .empty;
-                try app.chat.?.append(app.gpa, '/');
-            },
-            'r', 'R' => app.selectNext(.robot),
-            'v', 'V' => if (!app.keys.alt) app.selectNext(.vehicle),
-            'g', 'G' => app.selectNext(.cannon),
-            'b', 'B' => app.factory_list.shown = !app.factory_list.shown,
-            'h', 'H' => app.news.history = !app.news.history,
-            'p', 'P' => app.menus.show(.player_list, true),
-            22 => app.control.selectAll(world, .vehicle, rng), // ctrl+v
-            18 => app.control.selectAll(world, .robot, rng), // ctrl+r
-            3 => app.control.selectAll(world, .cannon, rng), // ctrl+c
-            1 => app.control.selectAll(world, null, rng), // ctrl+a
-            ' ' => if (app.control.nextNotice(world, app.realTime(), rng)) |n| {
+            c.SDLK_RETURN, c.SDLK_KP_ENTER => app.startChat(""),
+            c.SDLK_SLASH => app.startChat("/"),
+            c.SDLK_R => if (ctrl) app.control.selectAll(world, .robot, rng) else app.selectNext(.robot),
+            c.SDLK_V => if (ctrl) app.control.selectAll(world, .vehicle, rng) else if (!app.keys.alt) app.selectNext(.vehicle),
+            c.SDLK_G => app.selectNext(.cannon),
+            c.SDLK_C => if (ctrl) app.control.selectAll(world, .cannon, rng),
+            c.SDLK_A => if (ctrl) app.control.selectAll(world, null, rng),
+            c.SDLK_B => app.factory_list.shown = !app.factory_list.shown,
+            c.SDLK_H => app.news.history = !app.news.history,
+            c.SDLK_P => app.menus.show(.player_list, true),
+            c.SDLK_SPACE => if (app.control.nextNotice(world, app.realTime(), rng)) |n| {
                 app.lookAt(n.obj.center_x, n.obj.center_y);
                 if (n.open_gui) _ = app.openWindow(n.obj);
             },
@@ -810,17 +811,24 @@ pub const App = struct {
         }
     }
 
-    fn typeChat(app: *App, key: u16) !void {
-        const text = &app.chat.?;
-        switch (key) {
-            '\r' => {
-                if (text.items.len > 0) try app.session.chat(text.items);
-                text.deinit(app.gpa);
-                app.chat = null;
-            },
-            8 => _ = text.pop(),
-            else => if (key >= 32 and key < 127) try text.append(app.gpa, @intCast(key)),
-        }
+    fn startChat(app: *App, text: []const u8) void {
+        if (app.chat != null) return;
+        app.chat = .empty;
+        app.chat.?.appendSlice(app.gpa, text) catch {};
+        app.display.textInput(true);
+    }
+
+    fn endChat(app: *App) void {
+        if (app.chat) |*t| t.deinit(app.gpa);
+        app.chat = null;
+        app.display.textInput(false);
+    }
+
+    /// Text typed while chatting (printable ASCII; the fonts have nothing
+    /// else).
+    fn typed(app: *App, text: []const u8) !void {
+        const chat = if (app.chat) |*t| t else return;
+        for (text) |ch| if (ch >= 32 and ch < 127) try chat.append(app.gpa, ch);
     }
 
     // -----------------------------------------------------------------------
@@ -882,6 +890,7 @@ pub const App = struct {
             };
         };
         app.sounds.music.update(danger, if (fort) |f| f.isDestroyed() else false, now, rng);
+        app.sounds.pump();
         app.speakWarnings(world, fort, now);
     }
 
@@ -970,9 +979,9 @@ pub const App = struct {
 
     fn render(app: *App, now: f64) void {
         const black: gfx.Color = .{ .r = 0, .g = 0, .b = 0 };
-        app.screen.fill(null, black);
+        app.display.frame.fill(null, black);
         const area = app.mapArea();
-        const cv: gfx.Canvas = .{ .target = app.screen, .clip = area, .dx = -app.view_x, .dy = -app.view_y };
+        const cv: gfx.Canvas = .{ .target = app.display.frame, .clip = area, .dx = -app.view_x, .dy = -app.view_y };
         const v = app.view();
         const world = &app.session.world;
         if (app.control.team != app.session.team) {
@@ -1007,7 +1016,7 @@ pub const App = struct {
                 app.control.selectBox(world, d[0], d[1], p[0], p[1], app.prng.random());
             }
 
-            const screen_map: gfx.Canvas = .{ .target = app.screen, .clip = area };
+            const screen_map: gfx.Canvas = .{ .target = app.display.frame, .clip = area };
             app.factory_list.draw(screen_map, world, app.control.team, &app.list_images, &app.fonts, area);
             app.notices.draw(screen_map, world, app.control.team, world.clock.paused, app.voteBox(), &app.msg_images, &app.fonts, area, now);
             app.news.draw(screen_map, &app.fonts, if (app.factory_list.shown) 5 + 142 else 5, area.h, now);
@@ -1017,7 +1026,7 @@ pub const App = struct {
             // The HUD shows a new unit: it reports.
             if (app.control.hud_unit != app.hud.portrait.ref_id) app.hud.showUnit(world.findOpt(app.control.hud_unit), now, app.prng.random());
             app.playSounds(world, v, now);
-            app.hud.draw(app.screen, .{
+            app.hud.draw(app.display.frame, .{
                 .world = world,
                 .team = app.session.team,
                 .selected = world.findOpt(app.control.hud_unit),
@@ -1028,13 +1037,13 @@ pub const App = struct {
             });
         }
 
-        const screen_cv: gfx.Canvas = .{ .target = app.screen, .clip = .{ .x = 0, .y = 0, .w = app.width, .h = app.height } };
+        const screen_cv: gfx.Canvas = .{ .target = app.display.frame, .clip = .{ .x = 0, .y = 0, .w = app.width, .h = app.height } };
         const ctx = app.menuContext();
         app.menus.update(ctx, now);
         app.menus.draw(screen_cv, &app.menu_art, &app.fonts, ctx, app.width, app.height);
         const over_menu = app.menus.contains(ctx, app.mouse_x, app.mouse_y);
         const kind = if (app.overMap(app.mouse_x, app.mouse_y) and !over_menu) app.control.cursorKind(world, app.drag != null) else .cursor;
         app.cursors.draw(screen_cv, kind, app.control.team, now, app.mouse_x, app.mouse_y);
-        _ = c.SDL_Flip(app.screen.surface);
+        app.display.present();
     }
 };

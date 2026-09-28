@@ -23,37 +23,25 @@ One program, `zod`, does everything:
 ## Building (macOS and Linux)
 
 Requires Zig 0.16.0 or newer (https://ziglang.org/download/, or
-`brew install zig`) and SDL 1.2 with SDL_image and SDL_mixer.
+`brew install zig`). Nothing else needs installing: SDL 3 and the OGG
+decoder are fetched and built from source by `zig build` (the first build
+takes a few minutes). On macOS, Xcode 14.1 or later must be installed for
+the system SDK.
 
-1. macOS: install the Xcode command line tools and Homebrew
-   (https://brew.sh), then build the SDL add-ons once:
+    zig build                  # -> zig-out/bin/zod
+    zig build run              # the campaign as red against a blue bot
+    zig build run -- play -m ../Data/Campaing/Z_original/p02_bb_orig01.map -r 1024x768
+    zig build run -- edit my.map -n 64x64 -P desert -N "My map"
+    zig build test             # unit tests
 
-       xcode-select --install
-       ./macos/build_deps.sh
-
-   This installs sdl12-compat (SDL 1.2 running on SDL2, native on Apple
-   Silicon) with Homebrew and builds SDL_image and SDL_mixer 1.2 into deps/.
-   Linux: install the development packages of SDL 1.2, SDL_image 1.2 and
-   SDL_mixer 1.2 (Debian/Ubuntu: libsdl1.2-dev libsdl-image1.2-dev
-   libsdl-mixer1.2-dev), or run ./macos/build_deps.sh as well.
-
-2. Build and play:
-
-       zig build                  # -> zig-out/bin/zod
-       zig build run              # the campaign as red against a blue bot
-       zig build run -- play -m ../Data/Campaing/Z_original/p02_bb_orig01.map -r 1024x768
-       zig build run -- edit my.map -n 64x64 -P desert -N "My map"
-       zig build test             # unit tests
-
-   ./macos/run_zod.sh [command options] does the same as `zig build run`.
+./macos/run_zod.sh [command options] does the same as `zig build run`.
 
 The game data lives in bin/; map and settings paths given to `zod play` and
 `zod server` are relative to it (-D picks another folder).
 
 Build options: -Doptimize=Debug|ReleaseSafe|ReleaseFast|ReleaseSmall
-(default ReleaseFast), -Ddeps-prefix=/path (default deps/install). SDL is
-found through pkg-config (including Homebrew's on macOS), so only native
-builds are supported.
+(default ReleaseFast) and -Dtarget for other targets (see
+github.com/castholm/SDL for which ones SDL can be built for).
 
 Some sound files the game refers to (for example
 assets/sounds/explosion_*.wav) are not in this repository; the game says it

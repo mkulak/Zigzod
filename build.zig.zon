@@ -3,6 +3,17 @@
     .version = "0.1.0",
     .fingerprint = 0xd8746a2d7b120ce1,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
-    .paths = .{ "build.zig", "build.zig.zon" },
+    .dependencies = .{
+        // SDL 3 built from source with the Zig build system.
+        .sdl = .{
+            .url = "git+https://github.com/castholm/SDL.git#b72b3671502a70e109350ecac90afdc480dcfcc6",
+            .hash = "sdl-0.5.4+3.4.16-SDL--sQ4qAH3kwC19Zs1kxdHplaSDnWl2MUptZD4AItI",
+        },
+        // stb_vorbis for the OGG music.
+        .stb = .{
+            .url = "git+https://github.com/nothings/stb.git#2c980bb59875b0d32144a71867fbdebb2f77cd20",
+            .hash = "N-V-__8AAPJDTgBMvhz_RoGlqYS1cMahRQ6Q5GVqYKny36gQ",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
 }

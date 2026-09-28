@@ -7,7 +7,6 @@
 //! leave craters and throw particles off nearby units.
 
 const std = @import("std");
-const c = @import("c");
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const sprites = @import("sprites.zig");
@@ -34,7 +33,7 @@ pub const Transforms = struct {
     map: std.AutoHashMapUnmanaged(Key, Entry) = .empty,
     frame: u32 = 0,
 
-    const Key = struct { src: *c.SDL_Surface, angle: u16, size: u16 };
+    const Key = struct { src: [*]u32, angle: u16, size: u16 };
     const Entry = struct { img: ?Image, used: u32 };
     const size_steps = 20;
     /// Frames between sweeps, and how long an unused copy is kept.
@@ -55,7 +54,7 @@ pub const Transforms = struct {
         if (!(s_f >= 1)) return null;
         const s: u16 = @intFromFloat(@min(s_f, 10 * size_steps));
         if (a == 0 and s == size_steps) return img;
-        const gop = t.map.getOrPut(t.gpa, .{ .src = img.surface, .angle = a, .size = s }) catch return null;
+        const gop = t.map.getOrPut(t.gpa, .{ .src = img.pixels, .angle = a, .size = s }) catch return null;
         if (!gop.found_existing) gop.value_ptr.img = make(img, a, s);
         gop.value_ptr.used = t.frame;
         return gop.value_ptr.img;

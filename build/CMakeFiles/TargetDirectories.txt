@@ -1,0 +1,5 @@
+/home/user/Zigzod/build/CMakeFiles/zod_core.dir
+/home/user/Zigzod/build/CMakeFiles/zod_engine.dir
+/home/user/Zigzod/build/CMakeFiles/zod_map_editor.dir
+/home/user/Zigzod/build/CMakeFiles/edit_cache.dir
+/home/user/Zigzod/build/CMakeFiles/rebuild_cache.dir

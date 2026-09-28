@@ -53,7 +53,9 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
     src/client.zig        the game client
       client/session.zig  connection and game state kept in sync with the
                           server; reports what happened as events
-      client/gfx.zig      images, drawing with clipping, team colors
+      client/gfx.zig      images (plain ARGB buffers), drawing with clipping,
+                          team colors
+      client/display.zig  the window: the frame shown through an SDL texture
       client/terrain.zig  the ground, animated water, zone markers, craters
       client/sprites.zig  all object and effect images
       client/objects.zig  object animations and drawing (buildings, items)
@@ -67,7 +69,8 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/messages.zig news and chat lines, computer messages, vote box
       client/portrait.zig the talking faces in the HUD
       client/portrait_frames.zig  their animation frames (data)
-      client/sound.zig    sound effects, voices, music
+      client/sound.zig    sound effects, voices, music (SDL3 audio streams,
+                          stb_vorbis)
       client/menus.zig    in-game menus (main, options, teams, bots,
                           players, maps, "are you sure")
       client/app.zig      window, main loop, camera
@@ -93,6 +96,13 @@ run from the repository root.
    in one loop). The transitional C-ABI ports of single C++ files are gone
    too; the SDL_gfx rotozoomer became `Image.rotozoom` (checked to give the
    same pixels).
+6. **SDL 3** - done: the client and editor moved from SDL 1.2 (through
+   sdl12-compat, with SDL_image and SDL_mixer) to SDL 3, built from source
+   by `zig build` together with stb_vorbis, so building needs nothing but
+   Zig. Images are loaded by SDL 3 (PNG, BMP) into plain pixel buffers;
+   the frame is drawn in software as before and shown through a texture,
+   scaled without smoothing on high density screens; sounds are SDL 3
+   audio streams mixed by the device.
 
 ## Behaviour changes
 
@@ -140,3 +150,4 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   will show it;
 * drawing images no longer goes through SDL's blit, which costs ~200 us a
   call on sdl12-compat: preparing a map's ground went from 1.2 s to 6 ms.
+* the map editor saves its map picture as PNG (was a 5 MB BMP).

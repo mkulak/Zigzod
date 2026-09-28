@@ -16,6 +16,7 @@ const font = @import("client/font.zig");
 const Sprites = @import("client/sprites.zig").Sprites;
 const Renderer = @import("client/objects.zig").Renderer;
 const Effects = @import("client/effects.zig").Effects;
+const Display = @import("client/display.zig").Display;
 
 const k = game.constants;
 const mapfmt = game.map;
@@ -218,7 +219,7 @@ pub const Editor = struct {
     io: std.Io,
     assets: [:0]const u8,
     path: []const u8,
-    screen: Image,
+    display: Display,
     width: i32 = 800,
     height: i32 = 600,
 
@@ -286,11 +287,8 @@ pub const Editor = struct {
         };
         errdefer model.deinit();
 
-        if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) return error.SdlInitFailed;
-        errdefer c.SDL_Quit();
-        c.SDL_WM_SetCaption("Zod Map Editor", "Zod Map Editor");
-        _ = c.SDL_EnableUNICODE(1);
-        const surface: *c.SDL_Surface = c.SDL_SetVideoMode(800, 600, 32, c.SDL_SWSURFACE | c.SDL_RESIZABLE) orelse return error.SdlVideoFailed;
+        var display = try Display.open("Zod Map Editor", 800, 600, false);
+        errdefer display.close();
 
         const e = try gpa.create(Editor);
         errdefer gpa.destroy(e);
@@ -299,7 +297,7 @@ pub const Editor = struct {
             .io = io,
             .assets = assets,
             .path = options.path,
-            .screen = .{ .surface = surface },
+            .display = display,
             .terrain_info = terrain_info,
             .palettes = gfx.TeamPalettes.load(assets),
             .sheets = undefined,
@@ -338,7 +336,7 @@ pub const Editor = struct {
         e.sheets.deinit();
         gpa.destroy(e.terrain_info);
         gpa.free(e.assets);
-        c.SDL_Quit();
+        e.display.close();
         gpa.destroy(e);
     }
 
@@ -536,42 +534,37 @@ pub const Editor = struct {
 
     fn handleEvents(e: *Editor) !void {
         var ev: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&ev) != 0) {
+        while (c.SDL_PollEvent(&ev)) {
             switch (ev.type) {
-                c.SDL_QUIT => e.quit = true,
-                c.SDL_VIDEORESIZE => {
-                    const surface: *c.SDL_Surface = c.SDL_SetVideoMode(ev.resize.w, ev.resize.h, 32, c.SDL_SWSURFACE | c.SDL_RESIZABLE) orelse continue;
-                    e.screen = .{ .surface = surface };
-                    e.width = ev.resize.w;
-                    e.height = ev.resize.h;
+                c.SDL_EVENT_QUIT => e.quit = true,
+                c.SDL_EVENT_WINDOW_RESIZED => {
+                    try e.display.resize(ev.window.data1, ev.window.data2);
+                    e.width = e.display.frame.w;
+                    e.height = e.display.frame.h;
                     e.clampView();
                 },
-                c.SDL_MOUSEMOTION => {
-                    e.mouse_x = ev.motion.x;
-                    e.mouse_y = ev.motion.y;
+                c.SDL_EVENT_MOUSE_MOTION => {
+                    e.mouse_x = @intFromFloat(ev.motion.x);
+                    e.mouse_y = @intFromFloat(ev.motion.y);
                     if (e.left_down) try e.click(false);
                 },
-                c.SDL_MOUSEBUTTONDOWN => switch (ev.button.button) {
-                    c.SDL_BUTTON_LEFT => {
-                        e.left_down = true;
-                        try e.click(true);
-                    },
-                    c.SDL_BUTTON_WHEELUP => e.nextObject(true),
-                    c.SDL_BUTTON_WHEELDOWN => e.nextObject(false),
-                    else => {},
+                c.SDL_EVENT_MOUSE_BUTTON_DOWN => if (ev.button.button == c.SDL_BUTTON_LEFT) {
+                    e.left_down = true;
+                    try e.click(true);
                 },
-                c.SDL_MOUSEBUTTONUP => if (ev.button.button == c.SDL_BUTTON_LEFT) {
+                c.SDL_EVENT_MOUSE_BUTTON_UP => if (ev.button.button == c.SDL_BUTTON_LEFT) {
                     e.left_down = false;
                     try e.release();
                 },
-                c.SDL_KEYDOWN => try e.keyDown(ev.key.keysym.sym),
-                c.SDL_KEYUP => e.keyUp(ev.key.keysym.sym),
+                c.SDL_EVENT_MOUSE_WHEEL => if (ev.wheel.y != 0) e.nextObject(ev.wheel.y > 0),
+                c.SDL_EVENT_KEY_DOWN => try e.keyDown(ev.key.key),
+                c.SDL_EVENT_KEY_UP => e.keyUp(ev.key.key),
                 else => {},
             }
         }
     }
 
-    fn keyDown(e: *Editor, sym: c_uint) !void {
+    fn keyDown(e: *Editor, sym: c.SDL_Keycode) !void {
         switch (sym) {
             c.SDLK_LEFT => e.keys.left = true,
             c.SDLK_RIGHT => e.keys.right = true,
@@ -580,18 +573,18 @@ pub const Editor = struct {
             c.SDLK_LCTRL, c.SDLK_RCTRL => e.keys.ctrl = true,
             c.SDLK_LSHIFT, c.SDLK_RSHIFT => e.keys.shift = true,
             c.SDLK_ESCAPE => e.zone_start = null,
-            c.SDLK_PRINT, c.SDLK_p => e.savePicture(),
-            c.SDLK_s => e.save(),
-            c.SDLK_r => e.ruler = switch (e.ruler) {
+            c.SDLK_PRINTSCREEN, c.SDLK_P => e.savePicture(),
+            c.SDLK_S => e.save(),
+            c.SDLK_R => e.ruler = switch (e.ruler) {
                 .off => .edges,
                 .edges => .grid,
                 .grid => .off,
             },
-            c.SDLK_z => if (e.keys.ctrl) {
+            c.SDLK_Z => if (e.keys.ctrl) {
                 if (e.keys.shift) try e.back(&e.redo, &e.undo) else try e.back(&e.undo, &e.redo);
             },
-            c.SDLK_y => if (e.keys.ctrl) try e.back(&e.redo, &e.undo),
-            c.SDLK_m => {
+            c.SDLK_Y => if (e.keys.ctrl) try e.back(&e.redo, &e.undo),
+            c.SDLK_M => {
                 const n = @typeInfo(Mode).@"enum".fields.len;
                 const i = @intFromEnum(e.mode);
                 e.mode = @enumFromInt(if (e.keys.shift) (i + n - 1) % n else (i + 1) % n);
@@ -600,18 +593,18 @@ pub const Editor = struct {
                 e.extra_links = 0;
                 e.zone_start = null;
             },
-            c.SDLK_o => e.nextObject(!e.keys.shift),
-            c.SDLK_t => e.team = @enumFromInt((@intFromEnum(e.team) + 1) % k.Team.count),
-            c.SDLK_l => e.level = (e.level + 1) % k.max_building_levels,
+            c.SDLK_O => e.nextObject(!e.keys.shift),
+            c.SDLK_T => e.team = @enumFromInt((@intFromEnum(e.team) + 1) % k.Team.count),
+            c.SDLK_L => e.level = (e.level + 1) % k.max_building_levels,
             c.SDLK_COMMA => e.extra_links -|= 1,
             c.SDLK_PERIOD => e.extra_links +|= 1,
             c.SDLK_SEMICOLON => e.health = if (e.health <= 0) 100 else e.health - 1,
-            c.SDLK_QUOTE => e.health = if (e.health >= 100) 0 else e.health + 1,
+            c.SDLK_APOSTROPHE => e.health = if (e.health >= 100) 0 else e.health + 1,
             else => {},
         }
     }
 
-    fn keyUp(e: *Editor, sym: c_uint) void {
+    fn keyUp(e: *Editor, sym: c.SDL_Keycode) void {
         switch (sym) {
             c.SDLK_LEFT => e.keys.left = false,
             c.SDLK_RIGHT => e.keys.right = false,
@@ -675,10 +668,10 @@ pub const Editor = struct {
     // -----------------------------------------------------------------------
 
     fn render(e: *Editor, now: f64) void {
-        e.screen.fill(null, .{ .r = 0, .g = 0, .b = 0 });
-        const screen: Canvas = .{ .target = e.screen, .clip = .{ .x = 0, .y = 0, .w = e.width, .h = e.height } };
+        e.display.frame.fill(null, .{ .r = 0, .g = 0, .b = 0 });
+        const screen: Canvas = .{ .target = e.display.frame, .clip = .{ .x = 0, .y = 0, .w = e.width, .h = e.height } };
         const view: Rect = .{ .x = e.view_x, .y = e.view_y, .w = e.viewW(), .h = e.viewH() };
-        const cv: Canvas = .{ .target = e.screen, .clip = .{ .x = map_x, .y = 0, .w = view.w, .h = view.h }, .dx = map_x - e.view_x, .dy = -e.view_y };
+        const cv: Canvas = .{ .target = e.display.frame, .clip = .{ .x = map_x, .y = 0, .w = view.w, .h = view.h }, .dx = map_x - e.view_x, .dy = -e.view_y };
         if (e.ground) |*g| {
             e.objects.update(&e.world, g, now);
             g.draw(cv, view, now, e.world.zones.items, e.prng.random());
@@ -692,7 +685,7 @@ pub const Editor = struct {
         e.drawPalette(screen);
         e.drawMinimap(screen, view);
         e.drawInfo(screen, now);
-        _ = c.SDL_Flip(e.screen.surface);
+        e.display.present();
     }
 
     /// What the mouse would do on the map.
@@ -876,7 +869,7 @@ pub const Editor = struct {
         if (now < e.status_until) Line.put(f, screen, x, &y, .{ .r = 255, .g = 255, .b = 0 }, "{s}", .{e.status.items});
     }
 
-    /// The whole map as a picture, next to the map file (.bmp).
+    /// The whole map as a picture, next to the map file (.png).
     fn savePicture(e: *Editor) void {
         const g = if (e.ground) |*g| g else return;
         const img = Image.create(e.mapW(), e.mapH()) orelse return;
@@ -890,9 +883,10 @@ pub const Editor = struct {
         e.objects.draw(cv, &e.world, whole);
         e.objects.drawAfter(cv, &e.world, whole);
         var buf: [1024]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&buf, "{s}.bmp", .{e.path}) catch return;
-        const rw = c.SDL_RWFromFile(path.ptr, "wb") orelse return e.say("could not write {s}", .{path});
-        if (c.SDL_SaveBMP_RW(img.surface, rw, 1) != 0) return e.say("could not write {s}", .{path});
+        const path = std.fmt.bufPrintZ(&buf, "{s}.png", .{e.path}) catch return;
+        const surface = img.asSurface() orelse return e.say("out of memory", .{});
+        defer c.SDL_DestroySurface(surface);
+        if (!c.SDL_SavePNG(surface, path.ptr)) return e.say("could not write {s}", .{path});
         e.say("saved {s}", .{path});
     }
 };

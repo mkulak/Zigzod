@@ -1,5 +1,8 @@
-//! Sound effects, voices and music (ZSoundEngine, ZMusicEngine). Without
-//! an audio device everything here quietly does nothing.
+//! Sound effects, voices and music (ZSoundEngine, ZMusicEngine) on SDL3
+//! audio: each sound playing has an audio stream bound to the device,
+//! which mixes them and converts formats; music is decoded from OGG with
+//! stb_vorbis into a stream of its own, topped up every frame (`pump`).
+//! Without an audio device everything here quietly does nothing.
 
 const std = @import("std");
 const c = @import("c");
@@ -99,9 +102,28 @@ fn computerFile(m: Computer) []const u8 {
     };
 }
 
+/// A WAV file in memory.
+const Clip = struct {
+    data: [*]u8,
+    len: u32,
+    spec: c.SDL_AudioSpec,
+
+    fn load(path: [:0]const u8) ?Clip {
+        var spec: c.SDL_AudioSpec = undefined;
+        var data: [*c]u8 = null;
+        var len: u32 = 0;
+        if (!c.SDL_LoadWAV(path.ptr, &spec, &data, &len)) return null;
+        return .{ .data = data, .len = len, .spec = spec };
+    }
+
+    fn deinit(clip: Clip) void {
+        c.SDL_free(clip.data);
+    }
+};
+
 /// A loaded sound and when it may play again.
 const Slot = struct {
-    chunk: ?*c.Mix_Chunk = null,
+    clip: ?Clip = null,
     def: Def,
     next: f64 = 0,
 };
@@ -112,30 +134,41 @@ const losing_lines = 10;
 
 pub const Sounds = struct {
     on: bool = false,
+    device: c.SDL_AudioDeviceID = 0,
+    /// Sounds play on these (a free one each time).
+    streams: [channels]?*c.SDL_AudioStream = @splat(null),
+    /// Volume, 0 to 1.
+    master: f32 = 1,
     effects: [@typeInfo(Effect).@"enum".fields.len][5]Slot = undefined,
     computer: [@typeInfo(Computer).@"enum".fields.len]Slot = undefined,
     losing_lines: [losing_lines]Slot = undefined,
     /// The robots' lines, ROB01..ROB75.
     voice: [voices]Slot = undefined,
     loops: [2]Slot = undefined,
-    loop_channel: [2]?c_int = .{ null, null },
+    loop_streams: [2]?*c.SDL_AudioStream = @splat(null),
+    loop_on: [2]bool = @splat(false),
     music: Music = .{},
 
     /// Open the audio device and load everything (`assets` is the folder
     /// with sounds/).
     pub fn init(s: *Sounds, assets: []const u8) void {
         s.* = .{};
-        if (c.SDL_InitSubSystem(c.SDL_INIT_AUDIO) != 0 or c.Mix_OpenAudio(22050, c.AUDIO_S16SYS, 2, 1024) != 0) {
+        s.clearSlots();
+        if (!c.SDL_InitSubSystem(c.SDL_INIT_AUDIO)) {
             std.log.info("no sound: {s}", .{c.SDL_GetError()});
-            s.on = false;
-            s.clearSlots();
+            return;
+        }
+        s.device = c.SDL_OpenAudioDevice(c.SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, null);
+        if (s.device == 0) {
+            std.log.info("no sound: {s}", .{c.SDL_GetError()});
+            c.SDL_QuitSubSystem(c.SDL_INIT_AUDIO);
             return;
         }
         s.on = true;
-        _ = c.Mix_AllocateChannels(channels);
-        _ = c.Mix_Volume(-1, 128);
-        _ = c.Mix_VolumeMusic(80);
-        s.clearSlots();
+        for (&s.streams) |*st| st.* = s.newStream();
+        for (&s.loop_streams) |*st| st.* = s.newStream();
+        s.music.stream = s.newStream();
+
         var buf: [512]u8 = undefined;
         for (&s.effects, 0..) |*slots, i| {
             for (effectDefs(@enumFromInt(i)), 0..) |d, j| slots[j] = load(assets, d, &buf);
@@ -154,14 +187,34 @@ pub const Sounds = struct {
             load(assets, .{ .file = "ROBFACT5.wav", .volume = 5 }, &buf),
         };
         s.music.load(assets);
+        s.music.setGain(s.master);
+    }
+
+    /// A stream bound to the device (its input format is set per sound).
+    fn newStream(s: *Sounds) ?*c.SDL_AudioStream {
+        var spec: c.SDL_AudioSpec = undefined;
+        if (!c.SDL_GetAudioDeviceFormat(s.device, &spec, null)) return null;
+        const st = c.SDL_CreateAudioStream(&spec, &spec) orelse return null;
+        if (!c.SDL_BindAudioStream(s.device, st)) {
+            c.SDL_DestroyAudioStream(st);
+            return null;
+        }
+        return st;
     }
 
     /// Volume in quarters: 0 (off) to 4 (full).
     pub fn setVolume(s: *Sounds, quarters: u8) void {
+        s.master = @as(f32, @floatFromInt(@min(quarters, 4))) / 4;
         if (!s.on) return;
-        const q: c_int = @min(quarters, 4);
-        _ = c.Mix_Volume(-1, @divTrunc(128 * q, 4));
-        _ = c.Mix_VolumeMusic(@divTrunc(80 * q, 4));
+        for (s.loop_streams, s.loops) |st, slot| if (st) |x| {
+            _ = c.SDL_SetAudioStreamGain(x, s.gain(slot.def.volume));
+        };
+        s.music.setGain(s.master);
+    }
+
+    /// Gain for a sound of `volume` (0..128, like SDL_mixer's).
+    fn gain(s: *const Sounds, volume: u32) f32 {
+        return @as(f32, @floatFromInt(@min(volume, 128))) / 128 * s.master;
     }
 
     fn clearSlots(s: *Sounds) void {
@@ -174,28 +227,40 @@ pub const Sounds = struct {
 
     fn load(assets: []const u8, d: Def, buf: []u8) Slot {
         const path = std.fmt.bufPrintZ(buf, "{s}/sounds/{s}", .{ assets, d.file }) catch return .{ .def = d };
-        const rw = c.SDL_RWFromFile(path.ptr, "rb") orelse return .{ .def = d };
-        const chunk = c.Mix_LoadWAV_RW(rw, 1);
-        if (chunk == null) std.log.warn("could not load sound {s}", .{path});
-        return .{ .chunk = chunk, .def = d };
+        const clip = Clip.load(path);
+        if (clip == null) std.log.warn("could not load sound {s}", .{path});
+        return .{ .clip = clip, .def = d };
     }
 
     pub fn deinit(s: *Sounds) void {
         if (!s.on) return;
-        _ = c.Mix_HaltChannel(-1);
+        c.SDL_CloseAudioDevice(s.device);
+        for (s.streams ++ s.loop_streams) |st| if (st) |x| c.SDL_DestroyAudioStream(x);
         s.music.deinit();
-        for (&s.effects) |*slots| for (slots) |slot| if (slot.chunk) |ch| c.Mix_FreeChunk(ch);
-        for ([_][]Slot{ &s.computer, &s.losing_lines, &s.voice, &s.loops }) |list| for (list) |slot| if (slot.chunk) |ch| c.Mix_FreeChunk(ch);
-        c.Mix_CloseAudio();
+        for (&s.effects) |*slots| for (slots) |slot| if (slot.clip) |cl| cl.deinit();
+        for ([_][]Slot{ &s.computer, &s.losing_lines, &s.voice, &s.loops }) |list| for (list) |slot| if (slot.clip) |cl| cl.deinit();
+        c.SDL_QuitSubSystem(c.SDL_INIT_AUDIO);
+    }
+
+    /// Start `clip` on stream `st`.
+    fn start(st: *c.SDL_AudioStream, clip: Clip, gain_: f32) void {
+        _ = c.SDL_ClearAudioStream(st);
+        _ = c.SDL_SetAudioStreamFormat(st, &clip.spec, null);
+        _ = c.SDL_SetAudioStreamGain(st, gain_);
+        _ = c.SDL_PutAudioStreamData(st, clip.data, @intCast(clip.len));
     }
 
     fn play(s: *Sounds, slot: *Slot, time: f64, rng: std.Random) void {
         if (!s.on) return;
-        const chunk = slot.chunk orelse return;
+        const clip = slot.clip orelse return;
         if (time < slot.next) return;
         slot.next = time + slot.def.gap + 0.01 * @as(f64, @floatFromInt(rng.uintLessThan(u32, 31)));
-        chunk.volume = @intCast(@min(@as(u32, slot.def.volume) + rng.uintLessThan(u32, @max(slot.def.shift, 1)), 128));
-        _ = c.Mix_PlayChannelTimed(-1, chunk, 0, -1);
+        const volume = @as(u32, slot.def.volume) + rng.uintLessThan(u32, @max(slot.def.shift, 1));
+        // The first stream with nothing left to play.
+        for (s.streams) |st| if (st) |x| if (c.SDL_GetAudioStreamQueued(x) == 0) {
+            start(x, clip, s.gain(volume));
+            return;
+        };
     }
 
     /// `time` is real time.
@@ -279,16 +344,26 @@ pub const Sounds = struct {
     pub fn loop(s: *Sounds, l: Loop, playing: bool) void {
         if (!s.on) return;
         const i = @intFromEnum(l);
+        const st = s.loop_streams[i] orelse return;
+        if (playing == s.loop_on[i]) return;
+        s.loop_on[i] = playing;
         if (!playing) {
-            if (s.loop_channel[i]) |ch| _ = c.Mix_HaltChannel(ch);
-            s.loop_channel[i] = null;
+            _ = c.SDL_ClearAudioStream(st);
             return;
         }
-        if (s.loop_channel[i] != null) return;
-        const chunk = s.loops[i].chunk orelse return;
-        chunk.volume = s.loops[i].def.volume;
-        const ch = c.Mix_PlayChannelTimed(-1, chunk, -1, -1);
-        if (ch >= 0) s.loop_channel[i] = ch;
+        const clip = s.loops[i].clip orelse return;
+        start(st, clip, s.gain(s.loops[i].def.volume));
+    }
+
+    /// Top up the loops and the music; call every frame.
+    pub fn pump(s: *Sounds) void {
+        if (!s.on) return;
+        for (s.loop_streams, s.loops, s.loop_on) |st, slot, on| {
+            const x = st orelse continue;
+            const clip = slot.clip orelse continue;
+            if (on and c.SDL_GetAudioStreamQueued(x) < clip.len) _ = c.SDL_PutAudioStreamData(x, clip.data, @intCast(clip.len));
+        }
+        s.music.pump();
     }
 };
 
@@ -302,7 +377,8 @@ pub const Danger = enum { calm, attacking, fort };
 /// "fort under attack" parts; the music jumps to a part fitting how the
 /// game goes.
 pub const Music = struct {
-    pieces: [3]?*c.Mix_Music = @splat(null),
+    pieces: [3]?*c.stb_vorbis = @splat(null),
+    stream: ?*c.SDL_AudioStream = null,
     playing: ?k.Planet = null,
     danger: Danger = .calm,
     /// A new danger level is taken on only after it held for a while.
@@ -339,22 +415,58 @@ pub const Music = struct {
         var buf: [512]u8 = undefined;
         for (&m.pieces, [_][]const u8{ "desert", "volcanic", "jungle" }) |*pc, name| {
             const path = std.fmt.bufPrintZ(&buf, "{s}/sounds/music_{s}.ogg", .{ assets, name }) catch continue;
-            pc.* = c.Mix_LoadMUS(path.ptr);
+            var err: c_int = 0;
+            pc.* = c.stb_vorbis_open_filename(path.ptr, &err, null);
+            if (pc.* == null) std.log.warn("could not load music {s}", .{path});
         }
     }
 
     fn deinit(m: *Music) void {
-        _ = c.Mix_HaltMusic();
-        for (m.pieces) |pc| if (pc) |p| c.Mix_FreeMusic(p);
+        if (m.stream) |st| c.SDL_DestroyAudioStream(st);
+        for (m.pieces) |pc| if (pc) |p| c.stb_vorbis_close(p);
+    }
+
+    fn setGain(m: *Music, master: f32) void {
+        if (m.stream) |st| _ = c.SDL_SetAudioStreamGain(st, 80.0 / 128.0 * master);
+    }
+
+    fn current(m: *const Music) ?*c.stb_vorbis {
+        return m.pieces[piece(m.playing orelse return null)];
     }
 
     pub fn start(m: *Music, planet: k.Planet) void {
-        const pc = m.pieces[piece(planet)] orelse return;
-        _ = c.Mix_PlayMusic(pc, -1);
+        const st = m.stream orelse return;
+        const v = m.pieces[piece(planet)] orelse return;
+        const info = c.stb_vorbis_get_info(v);
+        const spec: c.SDL_AudioSpec = .{ .format = c.SDL_AUDIO_S16, .channels = info.channels, .freq = @intCast(info.sample_rate) };
+        _ = c.SDL_ClearAudioStream(st);
+        _ = c.SDL_SetAudioStreamFormat(st, &spec, null);
+        _ = c.stb_vorbis_seek_start(v);
         m.playing = planet;
         m.danger = .calm;
         m.wanted = .calm;
         m.part_ends = null;
+    }
+
+    /// Keep about a quarter second decoded ahead; the piece repeats.
+    fn pump(m: *Music) void {
+        const st = m.stream orelse return;
+        const v = m.current() orelse return;
+        const info = c.stb_vorbis_get_info(v);
+        const ch: c_int = @max(info.channels, 1);
+        const ahead: c_int = @intCast(info.sample_rate / 4 * @as(c_uint, @intCast(ch)) * 2);
+        var buf: [4096]i16 = undefined;
+        var restarted = false;
+        while (c.SDL_GetAudioStreamQueued(st) < ahead) {
+            const n = c.stb_vorbis_get_samples_short_interleaved(v, ch, &buf, buf.len);
+            if (n == 0) {
+                if (restarted) return;
+                restarted = true;
+                _ = c.stb_vorbis_seek_start(v);
+                continue;
+            }
+            _ = c.SDL_PutAudioStreamData(st, &buf, n * ch * 2);
+        }
     }
 
     fn jump(m: *Music, time: f64, rng: std.Random) void {
@@ -363,7 +475,11 @@ pub const Music = struct {
         const level = @intFromEnum(m.danger);
         const starts = p.starts[level];
         const at = starts[rng.uintLessThan(usize, starts.len)];
-        _ = c.Mix_SetMusicPosition(at);
+        if (m.current()) |v| {
+            const rate: f64 = @floatFromInt(c.stb_vorbis_get_info(v).sample_rate);
+            _ = c.stb_vorbis_seek(v, @intFromFloat(at * rate));
+            if (m.stream) |st| _ = c.SDL_ClearAudioStream(st);
+        }
         m.part_ends = time + (p.ends[level] - at);
         m.change_at = time + @as(f64, switch (m.danger) {
             .calm => 5,

@@ -1,9 +1,10 @@
-//! Images and drawing for the client, on SDL 1.2 surfaces (from ZSDL_Surface
-//! and ZTeam in the C++ engine; software rendering only).
+//! Images and drawing for the client (from ZSDL_Surface and ZTeam in the
+//! C++ engine): software rendering into plain pixel buffers.
 //!
-//! Every image is converted to one 32-bit ARGB format when loaded, so
-//! recoloring and pixel effects can work on the pixels directly and blits
-//! onto the screen need no conversion.
+//! Every image is 32-bit ARGB, converted when loaded, so recoloring and
+//! pixel effects work on the pixels directly and drawing needs no
+//! conversion. SDL is only used to read image files; the finished frame
+//! is shown by display.zig.
 
 const std = @import("std");
 const c = @import("c");
@@ -27,10 +28,6 @@ pub const Rect = struct {
     pub fn contains(r: Rect, x: i32, y: i32) bool {
         return x >= r.x and y >= r.y and x < r.x + r.w and y < r.y + r.h;
     }
-
-    fn sdl(r: Rect) c.SDL_Rect {
-        return .{ .x = @intCast(r.x), .y = @intCast(r.y), .w = @intCast(r.w), .h = @intCast(r.h) };
-    }
 };
 
 pub const Color = struct {
@@ -48,95 +45,85 @@ pub const Color = struct {
     }
 };
 
-const rmask = 0x00FF0000;
-const gmask = 0x0000FF00;
-const bmask = 0x000000FF;
 const amask = 0xFF000000;
 
-/// An image (owns its SDL surface).
+/// An image: ARGB pixels (0xAARRGGBB), row after row.
 pub const Image = struct {
-    surface: *c.SDL_Surface,
+    w: i32,
+    h: i32,
+    pixels: [*]u32,
+
+    const gpa = std.heap.c_allocator;
 
     pub fn width(img: Image) i32 {
-        return img.surface.w;
+        return img.w;
     }
 
     pub fn height(img: Image) i32 {
-        return img.surface.h;
+        return img.h;
+    }
+
+    fn len(img: Image) usize {
+        return @as(usize, @intCast(img.w)) * @as(usize, @intCast(img.h));
+    }
+
+    pub fn all(img: Image) []u32 {
+        return img.pixels[0..img.len()];
     }
 
     pub fn deinit(img: Image) void {
-        c.SDL_FreeSurface(img.surface);
+        gpa.free(img.all());
     }
 
-    /// Load an image file (bmp/png/...); null (and a message) if missing.
+    /// A new, fully transparent image.
+    pub fn create(w: i32, h: i32) ?Image {
+        if (w <= 0 or h <= 0) return null;
+        const pixels = gpa.alloc(u32, @as(usize, @intCast(w)) * @as(usize, @intCast(h))) catch return null;
+        @memset(pixels, 0);
+        return .{ .w = w, .h = h, .pixels = pixels.ptr };
+    }
+
+    /// Load a BMP or PNG file; null (and a message) if missing.
     pub fn load(path: [:0]const u8) ?Image {
-        const raw: *c.SDL_Surface = c.IMG_Load(path.ptr) orelse {
+        return loadQuiet(path) orelse {
             std.log.warn("could not load: {s}", .{path});
             return null;
         };
-        defer c.SDL_FreeSurface(raw);
-        return fromSurface(raw);
     }
 
     /// Like `load`, for files that may legitimately be missing.
     pub fn loadQuiet(path: [:0]const u8) ?Image {
-        const raw: *c.SDL_Surface = c.IMG_Load(path.ptr) orelse return null;
-        defer c.SDL_FreeSurface(raw);
+        const raw: *c.SDL_Surface = c.SDL_LoadSurface(path.ptr) orelse return null;
+        defer c.SDL_DestroySurface(raw);
         return fromSurface(raw);
     }
 
-    /// A copy of `s` in the standard format.
+    /// A copy of an SDL surface (formats without alpha come out opaque).
     pub fn fromSurface(s: *c.SDL_Surface) ?Image {
-        var format = std.mem.zeroes(c.SDL_PixelFormat);
-        format.BitsPerPixel = 32;
-        format.BytesPerPixel = 4;
-        format.Rmask = rmask;
-        format.Gmask = gmask;
-        format.Bmask = bmask;
-        format.Amask = amask;
-        format.Rshift = 16;
-        format.Gshift = 8;
-        format.Bshift = 0;
-        format.Ashift = 24;
-        format.alpha = 255;
-        const converted: *c.SDL_Surface = c.SDL_ConvertSurface(s, &format, c.SDL_SWSURFACE) orelse return null;
-        // Images without an alpha channel come out fully transparent.
-        if (s.format.*.Amask == 0) {
-            const img: Image = .{ .surface = converted };
-            if (s.flags & c.SDL_SRCCOLORKEY != 0) {
-                // The color key becomes transparency.
-                var kr: u8 = 0;
-                var kg: u8 = 0;
-                var kb: u8 = 0;
-                c.SDL_GetRGB(s.format.*.colorkey, s.format, &kr, &kg, &kb);
-                const key = Color.argb(.{ .r = kr, .g = kg, .b = kb, .a = 0 }) & 0xFFFFFF;
-                var it = img.rows();
-                while (it.next()) |r| for (r) |*p| {
-                    p.* = if (p.* & 0xFFFFFF == key) 0 else p.* | amask;
-                };
-            } else {
-                var it = img.rows();
-                while (it.next()) |r| for (r) |*p| {
-                    p.* |= amask;
-                };
-            }
+        const argb: *c.SDL_Surface = c.SDL_ConvertSurface(s, c.SDL_PIXELFORMAT_ARGB8888) orelse return null;
+        defer c.SDL_DestroySurface(argb);
+        const img = create(argb.w, argb.h) orelse return null;
+        const base: [*]const u8 = @ptrCast(argb.pixels.?);
+        var y: i32 = 0;
+        while (y < img.h) : (y += 1) {
+            const src: [*]const u32 = @ptrCast(@alignCast(base + @as(usize, @intCast(y)) * @as(usize, @intCast(argb.pitch))));
+            @memcpy(img.row(y), src[0..@intCast(img.w)]);
         }
-        _ = c.SDL_SetAlpha(converted, c.SDL_SRCALPHA, 255);
-        return .{ .surface = converted };
+        return img;
     }
 
-    pub fn create(w: i32, h: i32) ?Image {
-        const s: *c.SDL_Surface = c.SDL_CreateRGBSurface(c.SDL_SWSURFACE, w, h, 32, rmask, gmask, bmask, amask) orelse return null;
-        _ = c.SDL_SetAlpha(s, c.SDL_SRCALPHA, 255);
-        return .{ .surface = s };
+    /// The image as an SDL surface sharing its pixels (to save it).
+    pub fn asSurface(img: Image) ?*c.SDL_Surface {
+        return c.SDL_CreateSurfaceFrom(img.w, img.h, c.SDL_PIXELFORMAT_ARGB8888, img.pixels, img.w * 4);
     }
 
     pub fn clone(img: Image) ?Image {
-        return fromSurface(img.surface);
+        const out = create(img.w, img.h) orelse return null;
+        @memcpy(out.all(), img.all());
+        return out;
     }
 
-    /// Pixel rows (ARGB), for direct manipulation.
+    /// Pixel rows, for direct manipulation.
     pub fn rows(img: Image) RowIterator {
         return .{ .img = img, .y = 0 };
     }
@@ -153,10 +140,8 @@ pub const Image = struct {
     };
 
     pub fn row(img: Image, y: i32) []u32 {
-        const s = img.surface;
-        const base: [*]u8 = @ptrCast(s.pixels.?);
-        const start: [*]u32 = @ptrCast(@alignCast(base + @as(usize, @intCast(y)) * s.pitch));
-        return start[0..@intCast(s.w)];
+        const w: usize = @intCast(img.w);
+        return img.pixels[@as(usize, @intCast(y)) * w ..][0..w];
     }
 
     pub fn pixel(img: Image, x: i32, y: i32) Color {
@@ -218,19 +203,12 @@ pub const Image = struct {
         return out;
     }
 
-    /// In our ARGB layout (the screen may lack the alpha byte).
-    fn standard(img: Image) bool {
-        const f = img.surface.format.*;
-        return f.BytesPerPixel == 4 and f.Rmask == rmask and f.Gmask == gmask and f.Bmask == bmask;
-    }
-
     fn bounds(img: Image) Rect {
         return .{ .x = 0, .y = 0, .w = img.width(), .h = img.height() };
     }
 
     /// Draw `src` (or a part of it) onto this image at (x, y): blended by
-    /// its alpha, this image's alpha left as it is (like SDL's blits,
-    /// which are far slower per call on sdl12-compat).
+    /// its alpha, this image's alpha left as it is.
     pub fn draw(dst: Image, src: Image, part: ?Rect, x: i32, y: i32) void {
         dst.blit(src, part, x, y, false);
     }
@@ -241,16 +219,6 @@ pub const Image = struct {
     }
 
     fn blit(dst: Image, src: Image, part: ?Rect, x: i32, y: i32, raw: bool) void {
-        if (!dst.standard() or !src.standard()) {
-            if (raw) _ = c.SDL_SetAlpha(src.surface, 0, 255);
-            defer if (raw) {
-                _ = c.SDL_SetAlpha(src.surface, c.SDL_SRCALPHA, 255);
-            };
-            var from = if (part) |p| p.sdl() else src.bounds().sdl();
-            var to: c.SDL_Rect = .{ .x = @intCast(x), .y = @intCast(y), .w = 0, .h = 0 };
-            _ = c.SDL_UpperBlit(src.surface, &from, dst.surface, &to);
-            return;
-        }
         const want = part orelse src.bounds();
         const from = want.intersect(src.bounds()) orelse return;
         const at_x = x + from.x - want.x;
@@ -284,8 +252,9 @@ pub const Image = struct {
     }
 
     pub fn fill(img: Image, r: ?Rect, col: Color) void {
-        var sr = if (r) |x| x.sdl() else undefined;
-        _ = c.SDL_FillRect(img.surface, if (r != null) &sr else null, col.argb());
+        const area = (r orelse img.bounds()).intersect(img.bounds()) orelse return;
+        var y = area.y;
+        while (y < area.y + area.h) : (y += 1) @memset(img.row(y)[@intCast(area.x)..][0..@intCast(area.w)], col.argb());
     }
 };
 
@@ -319,7 +288,6 @@ pub const Canvas = struct {
         if (alpha == 255) return cv.draw(img, x, y);
         const to = Rect{ .x = x + cv.dx, .y = y + cv.dy, .w = img.width(), .h = img.height() };
         const visible = to.intersect(cv.clip) orelse return;
-        const fmt = cv.target.surface.format.*;
         var j: i32 = 0;
         while (j < visible.h) : (j += 1) {
             const src = img.row(visible.y - to.y + j);
@@ -330,13 +298,13 @@ pub const Canvas = struct {
                 const a = ((s >> 24) * alpha) / 255;
                 if (a == 0) continue;
                 const d = &dst[@intCast(visible.x + i)];
-                var r: u32 = (d.* & fmt.Rmask) >> @intCast(fmt.Rshift);
-                var g: u32 = (d.* & fmt.Gmask) >> @intCast(fmt.Gshift);
-                var b: u32 = (d.* & fmt.Bmask) >> @intCast(fmt.Bshift);
+                var r: u32 = (d.* >> 16) & 0xFF;
+                var g: u32 = (d.* >> 8) & 0xFF;
+                var b: u32 = d.* & 0xFF;
                 r = (((s >> 16) & 0xFF) * a + r * (255 - a)) / 255;
                 g = (((s >> 8) & 0xFF) * a + g * (255 - a)) / 255;
                 b = ((s & 0xFF) * a + b * (255 - a)) / 255;
-                d.* = (d.* & ~(fmt.Rmask | fmt.Gmask | fmt.Bmask)) | r << @intCast(fmt.Rshift) | g << @intCast(fmt.Gshift) | b << @intCast(fmt.Bshift);
+                d.* = (d.* & amask) | r << 16 | g << 8 | b;
             }
         }
     }
@@ -346,7 +314,6 @@ pub const Canvas = struct {
     pub fn drawTinted(cv: Canvas, img: Image, x: i32, y: i32, tint: Color, alpha: u8) void {
         const to = Rect{ .x = x + cv.dx, .y = y + cv.dy, .w = img.width(), .h = img.height() };
         const visible = to.intersect(cv.clip) orelse return;
-        const fmt = cv.target.surface.format.*;
         var j: i32 = 0;
         while (j < visible.h) : (j += 1) {
             const src = img.row(visible.y - to.y + j);
@@ -360,13 +327,13 @@ pub const Canvas = struct {
                 const sr = (((s >> 16) & 0xFF) * tint.r) / 255;
                 const sg = (((s >> 8) & 0xFF) * tint.g) / 255;
                 const sb = ((s & 0xFF) * tint.b) / 255;
-                var r: u32 = (d.* & fmt.Rmask) >> @intCast(fmt.Rshift);
-                var g: u32 = (d.* & fmt.Gmask) >> @intCast(fmt.Gshift);
-                var b: u32 = (d.* & fmt.Bmask) >> @intCast(fmt.Bshift);
+                var r: u32 = (d.* >> 16) & 0xFF;
+                var g: u32 = (d.* >> 8) & 0xFF;
+                var b: u32 = d.* & 0xFF;
                 r = (sr * a + r * (255 - a)) / 255;
                 g = (sg * a + g * (255 - a)) / 255;
                 b = (sb * a + b * (255 - a)) / 255;
-                d.* = (d.* & ~(fmt.Rmask | fmt.Gmask | fmt.Bmask)) | r << @intCast(fmt.Rshift) | g << @intCast(fmt.Gshift) | b << @intCast(fmt.Bshift);
+                d.* = (d.* & amask) | r << 16 | g << 8 | b;
             }
         }
     }
