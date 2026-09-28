@@ -79,6 +79,13 @@ pub const Image = struct {
         return fromSurface(raw);
     }
 
+    /// Like `load`, for files that may legitimately be missing.
+    pub fn loadQuiet(path: [:0]const u8) ?Image {
+        const raw: *c.SDL_Surface = c.IMG_Load(path.ptr) orelse return null;
+        defer c.SDL_FreeSurface(raw);
+        return fromSurface(raw);
+    }
+
     /// A copy of `s` in the standard format.
     pub fn fromSurface(s: *c.SDL_Surface) ?Image {
         var format = std.mem.zeroes(c.SDL_PixelFormat);
@@ -163,6 +170,13 @@ pub const Image = struct {
         _ = c.SDL_UpperBlit(src.surface, &from, dst.surface, &to);
     }
 
+    /// Copy `src` onto this image at (x, y), alpha included (no blending).
+    pub fn copy(dst: Image, src: Image, x: i32, y: i32) void {
+        _ = c.SDL_SetAlpha(src.surface, 0, 255);
+        defer _ = c.SDL_SetAlpha(src.surface, c.SDL_SRCALPHA, 255);
+        dst.draw(src, null, x, y);
+    }
+
     pub fn fill(img: Image, r: ?Rect, col: Color) void {
         var sr = if (r) |x| x.sdl() else undefined;
         _ = c.SDL_FillRect(img.surface, if (r != null) &sr else null, col.argb());
@@ -192,6 +206,33 @@ pub const Canvas = struct {
         const visible = to.intersect(cv.clip) orelse return;
         const from = Rect{ .x = part.x + visible.x - to.x, .y = part.y + visible.y - to.y, .w = visible.w, .h = visible.h };
         cv.target.draw(img, from, visible.x, visible.y);
+    }
+
+    /// Draw with extra transparency (0: invisible, 255: normal).
+    pub fn drawAlpha(cv: Canvas, img: Image, x: i32, y: i32, alpha: u8) void {
+        if (alpha == 255) return cv.draw(img, x, y);
+        const to = Rect{ .x = x + cv.dx, .y = y + cv.dy, .w = img.width(), .h = img.height() };
+        const visible = to.intersect(cv.clip) orelse return;
+        const fmt = cv.target.surface.format.*;
+        var j: i32 = 0;
+        while (j < visible.h) : (j += 1) {
+            const src = img.row(visible.y - to.y + j);
+            const dst = cv.target.row(visible.y + j);
+            var i: i32 = 0;
+            while (i < visible.w) : (i += 1) {
+                const s = src[@intCast(visible.x - to.x + i)];
+                const a = ((s >> 24) * alpha) / 255;
+                if (a == 0) continue;
+                const d = &dst[@intCast(visible.x + i)];
+                var r: u32 = (d.* & fmt.Rmask) >> @intCast(fmt.Rshift);
+                var g: u32 = (d.* & fmt.Gmask) >> @intCast(fmt.Gshift);
+                var b: u32 = (d.* & fmt.Bmask) >> @intCast(fmt.Bshift);
+                r = (((s >> 16) & 0xFF) * a + r * (255 - a)) / 255;
+                g = (((s >> 8) & 0xFF) * a + g * (255 - a)) / 255;
+                b = ((s & 0xFF) * a + b * (255 - a)) / 255;
+                d.* = (d.* & ~(fmt.Rmask | fmt.Gmask | fmt.Bmask)) | r << @intCast(fmt.Rshift) | g << @intCast(fmt.Gshift) | b << @intCast(fmt.Bshift);
+            }
+        }
     }
 
     /// The image as a white silhouette (units flash when hit).
@@ -298,7 +339,8 @@ pub fn loadTeamImages(palettes: *const TeamPalettes, comptime fmt: []const u8, a
         if (team == .none or team == .red) {
             var buf: [512]u8 = undefined;
             const path = std.fmt.bufPrintZ(&buf, fmt, args ++ .{team.name()}) catch continue;
-            images[i] = Image.load(path);
+            // Some things have no neutral version.
+            images[i] = if (team == .none) Image.loadQuiet(path) else Image.load(path);
         }
     }
     if (images[@intFromEnum(k.Team.red)]) |red| {

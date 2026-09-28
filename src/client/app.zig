@@ -6,6 +6,9 @@ const game = @import("../game.zig");
 const net = @import("../net.zig");
 const gfx = @import("gfx.zig");
 const terrain_mod = @import("terrain.zig");
+const font = @import("font.zig");
+const Sprites = @import("sprites.zig").Sprites;
+const Renderer = @import("objects.zig").Renderer;
 const Session = @import("session.zig").Session;
 
 const k = game.constants;
@@ -37,6 +40,9 @@ pub const App = struct {
     palettes: gfx.TeamPalettes,
     sheets: terrain_mod.Sheets,
     terrain: ?terrain_mod.Terrain = null,
+    fonts: font.Fonts,
+    sprites: Sprites,
+    objects: Renderer,
     session: Session,
     prng: std.Random.DefaultPrng,
     clock_origin: std.Io.Timestamp,
@@ -92,11 +98,17 @@ pub const App = struct {
             .terrain_info = terrain_info,
             .palettes = palettes,
             .sheets = undefined,
+            .fonts = undefined,
+            .sprites = undefined,
+            .objects = undefined,
             .session = Session.init(gpa, conn, terrain_info, .{ .name = options.name, .team = options.team }),
             .prng = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
             .clock_origin = std.Io.Clock.awake.now(io),
         };
         app.sheets = terrain_mod.Sheets.load(assets, &app.palettes);
+        app.fonts = font.Fonts.load(assets);
+        app.sprites = Sprites.load(assets, &app.palettes);
+        app.objects = Renderer.init(gpa, &app.sprites, &app.fonts);
         try app.session.start();
         return app;
     }
@@ -104,6 +116,9 @@ pub const App = struct {
     pub fn deinit(app: *App) void {
         const gpa = app.gpa;
         if (app.terrain) |*t| t.deinit();
+        app.objects.deinit();
+        app.sprites.deinit();
+        app.fonts.deinit();
         app.sheets.deinit();
         app.session.deinit();
         gpa.destroy(app.terrain_info);
@@ -146,6 +161,12 @@ pub const App = struct {
                     break :blk null;
                 };
                 app.focused = false;
+                app.objects.reset();
+                app.objects.planet = m.planet();
+            },
+            .deleted_object => |id| app.objects.remove(id),
+            .repair_anim => |ra| if (app.session.find(ra.ref_id)) |o| {
+                app.objects.repairAnim(o, ra.on, ra.remaining_time, app.session.world.now());
             },
             .new_object => |id| if (!app.focused) {
                 const o = app.session.find(id) orelse continue;
@@ -157,6 +178,7 @@ pub const App = struct {
             .reset_game => {
                 if (app.terrain) |*t| t.deinit();
                 app.terrain = null;
+                app.objects.reset();
             },
             .news => |n| std.log.info("news: {s}", .{n.text}),
             else => {},
@@ -242,17 +264,23 @@ pub const App = struct {
         const view: gfx.Rect = .{ .x = app.view_x, .y = app.view_y, .w = area.w, .h = area.h };
 
         if (app.terrain) |*t| {
-            t.draw(cv, view, app.session.world.now(), app.session.world.zones.items, app.prng.random());
-            app.renderObjects(cv, view);
+            const world = &app.session.world;
+            app.objects.update(world, t, world.now());
+            t.draw(cv, view, world.now(), world.zones.items, app.prng.random());
+            app.objects.drawPre(cv, world, view);
+            app.objects.draw(cv, world, view);
+            app.renderUnits(cv, view);
+            app.objects.drawAfter(cv, world, view);
         }
         _ = now;
         _ = c.SDL_Flip(app.screen.surface);
     }
 
-    /// Placeholder until the objects' graphics are ported: team colored
+    /// Placeholder until the units' graphics are ported: team colored
     /// boxes with a health bar.
-    fn renderObjects(app: *App, cv: gfx.Canvas, view: gfx.Rect) void {
+    fn renderUnits(app: *App, cv: gfx.Canvas, view: gfx.Rect) void {
         for (app.session.world.objects.items) |o| {
+            if (!o.isUnit()) continue;
             const r: gfx.Rect = .{ .x = o.x, .y = o.y, .w = o.width_pix, .h = o.height_pix };
             if (r.intersect(view) == null) continue;
             const color = app.palettes.color(o.owner);
