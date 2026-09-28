@@ -55,6 +55,8 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
                           server; reports what happened as events
       client/gfx.zig      images (plain ARGB buffers), drawing with clipping,
                           team colors
+      client/assets.zig   the art, loaded once into one arena; missing
+                          files become a placeholder (and are logged)
       client/display.zig  the window: the frame shown through an SDL texture
       client/terrain.zig  the ground, animated water, zone markers, craters
       client/sprites.zig  all object and effect images

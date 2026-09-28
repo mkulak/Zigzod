@@ -9,6 +9,7 @@
 const std = @import("std");
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
+const Assets = @import("assets.zig").Assets;
 const font = @import("font.zig");
 const portrait_mod = @import("portrait.zig");
 
@@ -77,71 +78,65 @@ pub const Click = union(enum) {
     jump: i32,
 };
 
-const Images = struct {
-    buttons: [Button.count][3]?Image = @splat(@splat(null)),
-    side: gfx.TeamImages = @splat(null),
-    bottom_left: ?Image = null,
-    bottom_center: ?Image = null,
-    bottom_right: ?Image = null,
-    side_filler: ?Image = null,
-    health_full: ?Image = null,
-    health_lost: ?Image = null,
-    health_empty: ?Image = null,
-    unit_amount_bar: gfx.TeamImages = @splat(null),
-    grenade: gfx.TeamImages = @splat(null),
-    robot_icon: [k.Robot.count]gfx.TeamImages = @splat(@splat(null)),
-    cannon_icon: [k.Cannon.count]gfx.TeamImages = @splat(@splat(null)),
-    vehicle_icon: [k.Vehicle.count]gfx.TeamImages = @splat(@splat(null)),
-    robot_label: [k.Robot.count]?Image = @splat(null),
-    cannon_label: [k.Cannon.count]?Image = @splat(null),
-    vehicle_label: [k.Vehicle.count]?Image = @splat(null),
-    /// The driver's name plate, in the team's color.
-    unit_label: [k.Robot.count]gfx.TeamImages = @splat(@splat(null)),
+const Teams = [k.Team.count]Image;
 
-    fn load(assets: []const u8, palettes: *const gfx.TeamPalettes) Images {
-        var m: Images = .{};
-        const dir = "{s}/other/hud/";
+const Images = struct {
+    buttons: [Button.count][3]Image,
+    side: Teams,
+    bottom_left: Image,
+    bottom_center: Image,
+    bottom_right: Image,
+    side_filler: Image,
+    health_full: Image,
+    health_lost: Image,
+    health_empty: Image,
+    unit_amount_bar: Teams,
+    grenade: Teams,
+    robot_icon: [k.Robot.count]Teams,
+    cannon_icon: [k.Cannon.count]Teams,
+    vehicle_icon: [k.Vehicle.count]Teams,
+    robot_label: [k.Robot.count]Image,
+    cannon_label: [k.Cannon.count]Image,
+    vehicle_label: [k.Vehicle.count]Image,
+    /// The driver's name plate, in the team's color.
+    unit_label: [k.Robot.count]Teams,
+
+    fn load(a: *Assets) Assets.Error!Images {
+        const dir = "other/hud/";
+        var m: Images = .{
+            .buttons = undefined,
+            .side = try a.teams(dir ++ "main_hud_side_{s}.png", .{}, .file),
+            .bottom_left = try a.image(dir ++ "main_hud_bottom_left.bmp", .{}),
+            .bottom_center = try a.image(dir ++ "main_hud_bottom_center.bmp", .{}),
+            .bottom_right = try a.image(dir ++ "main_hud_bottom_right.bmp", .{}),
+            .side_filler = try a.image(dir ++ "side_filler.bmp", .{}),
+            .health_full = try a.image(dir ++ "health_full.png", .{}),
+            .health_lost = try a.image(dir ++ "health_lost.png", .{}),
+            .health_empty = try a.image(dir ++ "health_empty.png", .{}),
+            .unit_amount_bar = try a.teams(dir ++ "unit_amount_bar_{s}.bmp", .{}, .file),
+            .grenade = try a.teams(dir ++ "icon_grenade_{s}.png", .{}, .file),
+            .robot_icon = undefined,
+            .cannon_icon = undefined,
+            .vehicle_icon = undefined,
+            .robot_label = undefined,
+            .cannon_label = undefined,
+            .vehicle_label = undefined,
+            .unit_label = undefined,
+        };
         for (&m.buttons, 0..) |*imgs, b| {
             for (imgs, [_][]const u8{ "active", "inactive", "pressed" }) |*img, state| {
-                img.* = one(assets, dir ++ "{s}_button_{s}.bmp", .{ @tagName(@as(Button, @enumFromInt(b))), state });
+                img.* = try a.image(dir ++ "{s}_button_{s}.bmp", .{ @tagName(@as(Button, @enumFromInt(b))), state });
             }
         }
-        m.side = gfx.loadTeamImages(palettes, dir ++ "main_hud_side_{s}.png", .{assets});
-        m.bottom_left = one(assets, dir ++ "main_hud_bottom_left.bmp", .{});
-        m.bottom_center = one(assets, dir ++ "main_hud_bottom_center.bmp", .{});
-        m.bottom_right = one(assets, dir ++ "main_hud_bottom_right.bmp", .{});
-        m.side_filler = one(assets, dir ++ "side_filler.bmp", .{});
-        m.health_full = one(assets, dir ++ "health_full.png", .{});
-        m.health_lost = one(assets, dir ++ "health_lost.png", .{});
-        m.health_empty = one(assets, dir ++ "health_empty.png", .{});
-        m.unit_amount_bar = gfx.loadTeamImages(palettes, dir ++ "unit_amount_bar_{s}.bmp", .{assets});
-        m.grenade = gfx.loadTeamImages(palettes, dir ++ "icon_grenade_{s}.png", .{assets});
         inline for (.{ .{ k.Robot, "robot" }, .{ k.Cannon, "cannon" }, .{ k.Vehicle, "vehicle" } }) |kind| {
             for (0..kind[0].count) |i| {
                 const name = @tagName(@as(kind[0], @enumFromInt(i)));
-                @field(m, kind[1] ++ "_icon")[i] = gfx.loadTeamImages(palettes, dir ++ "icon_{s}_{s}.png", .{ assets, name });
-                @field(m, kind[1] ++ "_label")[i] = one(assets, dir ++ "label_{s}.png", .{name});
+                @field(m, kind[1] ++ "_icon")[i] = try a.teams(dir ++ "icon_{[1]s}_{[0]s}.png", .{name}, .file);
+                @field(m, kind[1] ++ "_label")[i] = try a.image(dir ++ "label_{s}.png", .{name});
             }
         }
-        for (&m.unit_label, 0..) |*l, i| l.* = gfx.loadTeamImages(palettes, dir ++ "unit_label_{s}_{s}.png", .{ assets, @tagName(@as(k.Robot, @enumFromInt(i))) });
+        for (&m.unit_label, 0..) |*l, i| l.* = try a.teams(dir ++ "unit_label_{[1]s}_{[0]s}.png", .{@tagName(@as(k.Robot, @enumFromInt(i)))}, .file);
         return m;
-    }
-
-    fn one(assets: []const u8, comptime fmt: []const u8, args: anytype) ?Image {
-        var buf: [512]u8 = undefined;
-        return Image.load(std.fmt.bufPrintZ(&buf, fmt, .{assets} ++ args) catch return null);
-    }
-
-    fn deinit(m: *Images) void {
-        inline for (@typeInfo(Images).@"struct".fields) |f| free(&@field(m, f.name));
-    }
-
-    fn free(x: anytype) void {
-        switch (@typeInfo(@TypeOf(x.*))) {
-            .array => for (x) |*e| free(e),
-            .optional => if (x.*) |img| img.deinit(),
-            else => comptime unreachable,
-        }
     }
 };
 
@@ -162,6 +157,8 @@ pub const Hud = struct {
     planet: k.Planet = .desert,
     fonts: *const font.Fonts,
     palettes: *const gfx.TeamPalettes,
+    /// Drawn for what has no picture.
+    nothing: Image,
     buttons: [Button.count]ButtonState = initialButtons(),
     /// Minimap area within its box (depends on the map's shape).
     minimap: Rect = .{ .x = 0, .y = 0, .w = minimap_w, .h = minimap_h },
@@ -188,13 +185,8 @@ pub const Hud = struct {
         next: f64 = 0,
     };
 
-    pub fn init(assets: []const u8, palettes: *const gfx.TeamPalettes, fonts: *const font.Fonts) Hud {
-        return .{ .images = .load(assets, palettes), .faces = .load(assets, palettes), .fonts = fonts, .palettes = palettes };
-    }
-
-    pub fn deinit(h: *Hud) void {
-        h.images.deinit();
-        h.faces.deinit();
+    pub fn init(a: *Assets, fonts: *const font.Fonts) Assets.Error!Hud {
+        return .{ .images = try .load(a), .faces = try .load(a), .fonts = fonts, .palettes = &a.palettes, .nothing = a.nothing };
     }
 
     fn initialButtons() [Button.count]ButtonState {
@@ -365,8 +357,8 @@ pub const Hud = struct {
         return .{ screen_w - base_w, screen_h - base_h };
     }
 
-    fn buttonRect(h: *const Hud, b: Button, off: [2]i32) ?Rect {
-        const img = h.images.buttons[@intFromEnum(b)][@intFromEnum(h.state(b))] orelse return null;
+    fn buttonRect(h: *const Hud, b: Button, off: [2]i32) Rect {
+        const img = h.images.buttons[@intFromEnum(b)][@intFromEnum(h.state(b))];
         const p = b.pos();
         return .{ .x = p.x + if (p.left) 0 else off[0], .y = p.y + off[1], .w = img.width(), .h = img.height() };
     }
@@ -397,7 +389,7 @@ pub const Hud = struct {
         const off = offset(screen_w, screen_h);
         for (0..Button.count) |i| {
             const b: Button = @enumFromInt(i);
-            const r = h.buttonRect(b, off) orelse continue;
+            const r = h.buttonRect(b, off);
             if (!r.contains(x, y)) continue;
             if (b == .a) return if (h.alert) |id| .{ .jump = id } else .none;
             if (h.buttons[i] == .active) h.buttons[i] = .pressed;
@@ -419,9 +411,7 @@ pub const Hud = struct {
         for (&h.buttons, 0..) |*s, i| {
             if (s.* != .pressed) continue;
             const b: Button = @enumFromInt(i);
-            if (h.buttonRect(b, off)) |r| if (r.contains(x, y)) {
-                clicked = .{ .button = b };
-            };
+            if (h.buttonRect(b, off).contains(x, y)) clicked = .{ .button = b };
             s.* = .active;
         }
         return clicked;
@@ -456,32 +446,29 @@ pub const Hud = struct {
         const bar_y = off[1] + bottom_y;
         const right_end = side_x + off[0];
         var chat_area: Rect = .{ .x = 0, .y = off[1] + 460, .w = 0, .h = 18 };
-        if (m.bottom_left) |left| {
-            cv.draw(left, 0, bar_y);
-            h.drawUnitAmount(cv, v, off);
-            if (m.bottom_center) |center| if (m.bottom_right) |right| {
-                var x = left.width();
-                const end = right_end - right.width();
-                chat_area.x = x;
-                chat_area.w = end - x;
-                while (x < end) : (x += center.width()) {
-                    cv.drawPart(center, .{ .x = 0, .y = 0, .w = @min(center.width(), end - x), .h = center.height() }, x, bar_y);
-                }
-                cv.draw(right, end, bar_y);
-            };
+        const left = m.bottom_left;
+        const center = m.bottom_center;
+        const right = m.bottom_right;
+        cv.draw(left, 0, bar_y);
+        h.drawUnitAmount(cv, v, off);
+        var x = left.width();
+        const end = right_end - right.width();
+        chat_area.x = x;
+        chat_area.w = end - x;
+        while (x < end) : (x += center.width()) {
+            cv.drawPart(center, .{ .x = 0, .y = 0, .w = @min(center.width(), end - x), .h = center.height() }, x, bar_y);
         }
+        cv.draw(right, end, bar_y);
 
         // Side panel, with filler above it on tall screens.
-        if (m.side_filler) |filler| {
-            var y: i32 = 0;
-            while (y < off[1]) : (y += filler.height()) cv.draw(filler, right_end, y);
-        }
-        if (m.side[team]) |side| cv.draw(side, right_end, off[1]);
+        var y: i32 = 0;
+        while (y < off[1]) : (y += m.side_filler.height()) cv.draw(m.side_filler, right_end, y);
+        cv.draw(m.side[team], right_end, off[1]);
 
         for (0..Button.count) |i| {
             const b: Button = @enumFromInt(i);
-            const r = h.buttonRect(b, off) orelse continue;
-            if (m.buttons[i][@intFromEnum(h.buttons[i])]) |img| cv.draw(img, r.x, r.y);
+            const r = h.buttonRect(b, off);
+            cv.draw(m.buttons[i][@intFromEnum(h.buttons[i])], r.x, r.y);
         }
 
         h.drawClock(cv, v.time, off);
@@ -493,7 +480,7 @@ pub const Hud = struct {
     }
 
     fn drawUnitAmount(h: *const Hud, cv: gfx.Canvas, v: View, off: [2]i32) void {
-        const bar = h.images.unit_amount_bar[@intFromEnum(v.team)] orelse return;
+        const bar = h.images.unit_amount_bar[@intFromEnum(v.team)];
         const y = off[1] + 460;
         cv.fill(.{ .x = 132, .y = y, .w = 62, .h = 16 }, .{ .r = 0, .g = 0, .b = 0 });
         var units: i32 = 0;
@@ -529,24 +516,22 @@ pub const Hud = struct {
         const health_x = off[0] + side_x + 14;
         const health_y = off[1] + 213;
         const o = v.selected orelse {
-            if (m.health_empty) |img| cv.draw(img, health_x, health_y);
+            cv.draw(m.health_empty, health_x, health_y);
             return;
         };
-        const icon: ?Image, const label: ?Image, const driver: ?k.Robot = switch (o.kind) {
+        const icon: Image, const label: Image, const driver: ?k.Robot = switch (o.kind) {
             .robot => |r| .{ m.robot_icon[@intFromEnum(r)][team], m.robot_label[@intFromEnum(r)], r },
             .vehicle => |veh| .{ m.vehicle_icon[@intFromEnum(veh.type)][team], m.vehicle_label[@intFromEnum(veh.type)], o.driver_type },
             .cannon => |cn| .{ m.cannon_icon[@intFromEnum(cn.type)][team], m.cannon_label[@intFromEnum(cn.type)], o.driver_type },
-            else => .{ null, null, null },
+            else => .{ h.nothing, h.nothing, null },
         };
-        if (icon) |img| {
-            const shift: i32 = if (o.kind == .robot) 3 else 30 - (img.height() >> 1);
-            cv.draw(img, x, off[1] + 148 + shift);
-        }
-        if (driver) |d| if (m.unit_label[@intFromEnum(d)][team]) |img| cv.draw(img, x, off[1] + 124);
-        if (label) |img| cv.draw(img, x, off[1] + 230);
+        const shift: i32 = if (o.kind == .robot) 3 else 30 - (icon.height() >> 1);
+        cv.draw(icon, x, off[1] + 148 + shift);
+        if (driver) |d| cv.draw(m.unit_label[@intFromEnum(d)][team], x, off[1] + 124);
+        cv.draw(label, x, off[1] + 230);
 
         if (o.canHaveGrenades()) {
-            if (m.grenade[@intFromEnum(o.owner)]) |img| cv.draw(img, off[0] + 575, off[1] + 185);
+            cv.draw(m.grenade[@intFromEnum(o.owner)], off[0] + 575, off[1] + 185);
             var buf: [8]u8 = undefined;
             const text = std.fmt.bufPrint(&buf, "{d:0>2}", .{@as(u32, @intCast(@max(o.grenades, 0)))}) catch "";
             h.fonts.get(.big_white).draw(cv, text, off[0] + 600, off[1] + 187);
@@ -554,9 +539,9 @@ pub const Hud = struct {
 
         // Health: green what is left, yellow what was lost and can be
         // repaired, empty beyond the unit's maximum.
-        const full = m.health_full orelse return;
-        const lost = m.health_lost orelse return;
-        const empty = m.health_empty orelse return;
+        const full = m.health_full;
+        const lost = m.health_lost;
+        const empty = m.health_empty;
         if (o.isDestroyed()) return cv.draw(empty, health_x, health_y);
         const max_dist = 74;
         const green: i32 = @max(@divTrunc(max_dist * o.health, k.max_unit_health), 1);

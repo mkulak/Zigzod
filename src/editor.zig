@@ -25,6 +25,7 @@ const ZoneRect = mapfmt.ZoneRect;
 const Object = game.object.Object;
 const World = game.world.World;
 const Image = gfx.Image;
+const Assets = @import("client/assets.zig").Assets;
 const Canvas = gfx.Canvas;
 const Rect = gfx.Rect;
 const tile = k.tile_size;
@@ -217,14 +218,14 @@ pub const Model = struct {
 pub const Editor = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
-    assets: [:0]const u8,
+    /// All the art.
+    assets: *Assets,
     path: []const u8,
     display: Display,
     width: i32 = 800,
     height: i32 = 600,
 
     terrain_info: *mapfmt.Terrain,
-    palettes: gfx.TeamPalettes,
     sheets: terrain_mod.Sheets,
     fonts: font.Fonts,
     sprites: *Sprites,
@@ -268,14 +269,16 @@ pub const Editor = struct {
     quit: bool = false,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io, data_path: []const u8, options: Options) !*Editor {
-        const assets = try std.fmt.allocPrintSentinel(gpa, "{s}/assets", .{data_path}, 0);
-        errdefer gpa.free(assets);
+        const dir = try std.fmt.allocPrint(gpa, "{s}/assets", .{data_path});
+        defer gpa.free(dir);
+        const assets = try Assets.init(gpa, dir);
+        errdefer assets.deinit();
         const terrain_info = try gpa.create(mapfmt.Terrain);
         errdefer gpa.destroy(terrain_info);
         {
-            var dir = try std.Io.Dir.cwd().openDir(io, assets, .{});
-            defer dir.close(io);
-            terrain_info.* = try mapfmt.Terrain.load(io, dir);
+            var d = try std.Io.Dir.cwd().openDir(io, dir, .{});
+            defer d.close(io);
+            terrain_info.* = try mapfmt.Terrain.load(io, d);
         }
         const seed: u64 = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
         var prng: std.Random.DefaultPrng = .init(seed);
@@ -287,7 +290,7 @@ pub const Editor = struct {
         };
         errdefer model.deinit();
 
-        var display = try Display.open("Zod Map Editor", 800, 600, false);
+        var display = try Display.open(gpa, "Zod Map Editor", 800, 600, false);
         errdefer display.close();
 
         const e = try gpa.create(Editor);
@@ -299,7 +302,6 @@ pub const Editor = struct {
             .path = options.path,
             .display = display,
             .terrain_info = terrain_info,
-            .palettes = gfx.TeamPalettes.load(assets),
             .sheets = undefined,
             .fonts = undefined,
             .sprites = undefined,
@@ -310,10 +312,10 @@ pub const Editor = struct {
             .prng = prng,
             .clock_origin = std.Io.Clock.awake.now(io),
         };
-        e.sheets = terrain_mod.Sheets.load(assets, &e.palettes);
-        e.fonts = font.Fonts.load(assets);
-        e.sprites = try Sprites.load(gpa, assets, &e.palettes);
-        e.fx = Effects.init(gpa, e.sprites, &e.palettes, e.prng.random());
+        e.sheets = try .load(assets);
+        e.fonts = try .load(assets);
+        e.sprites = try Sprites.load(assets);
+        e.fx = Effects.init(gpa, e.sprites, &assets.palettes, e.prng.random());
         e.objects = Renderer.init(gpa, e.sprites, &e.fonts, &e.fx);
         try e.rebuild();
         return e;
@@ -322,7 +324,7 @@ pub const Editor = struct {
     pub fn deinit(e: *Editor) void {
         const gpa = e.gpa;
         if (e.ground) |*g| g.deinit();
-        if (e.minimap) |m| m.deinit();
+        if (e.minimap) |m| m.deinit(gpa);
         e.objects.deinit();
         e.fx.deinit();
         e.world.deinit();
@@ -331,11 +333,8 @@ pub const Editor = struct {
         e.redo.deinit(gpa);
         e.brush.deinit(gpa);
         e.status.deinit(gpa);
-        e.sprites.deinit();
-        e.fonts.deinit();
-        e.sheets.deinit();
         gpa.destroy(e.terrain_info);
-        gpa.free(e.assets);
+        e.assets.deinit();
         e.display.close();
         gpa.destroy(e);
     }
@@ -369,7 +368,7 @@ pub const Editor = struct {
         e.ground = try terrain_mod.Terrain.init(e.gpa, &e.sheets, e.terrain_info, m, e.prng.random());
         try e.objects.setMap(m, e.terrain_info);
         e.clampView();
-        if (e.minimap) |mm| mm.deinit();
+        if (e.minimap) |mm| mm.deinit(e.gpa);
         e.minimap = null;
     }
 
@@ -800,7 +799,7 @@ pub const Editor = struct {
         if (e.minimap == null) {
             const w: i32 = @max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(e.mapW())) * s)), 1);
             const h: i32 = @max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(e.mapH())) * s)), 1);
-            const img = Image.create(w, h) orelse return;
+            const img = Image.create(e.gpa, w, h) catch return;
             var j: i32 = 0;
             while (j < h) : (j += 1) {
                 const row = img.row(j);
@@ -819,7 +818,7 @@ pub const Editor = struct {
             if (o.owner == .none or o.kind == .building) continue;
             const x = minimap_x + @as(i32, @intFromFloat(@as(f64, @floatFromInt(o.center_x)) * s));
             const y = minimap_y + @as(i32, @intFromFloat(@as(f64, @floatFromInt(o.center_y)) * s));
-            screen.fill(.{ .x = x, .y = y, .w = 2, .h = 2 }, e.palettes.color(o.owner));
+            screen.fill(.{ .x = x, .y = y, .w = 2, .h = 2 }, e.assets.palettes.color(o.owner));
         }
         const vx = minimap_x + @as(i32, @intFromFloat(@as(f64, @floatFromInt(view.x)) * s));
         const vy = minimap_y + @as(i32, @intFromFloat(@as(f64, @floatFromInt(view.y)) * s));
@@ -872,8 +871,11 @@ pub const Editor = struct {
     /// The whole map as a picture, next to the map file (.png).
     fn savePicture(e: *Editor) void {
         const g = if (e.ground) |*g| g else return;
-        const img = Image.create(e.mapW(), e.mapH()) orelse return;
-        defer img.deinit();
+        const img = Image.create(e.gpa, e.mapW(), e.mapH()) catch {
+            e.say("Not enough memory for the picture", .{});
+            return;
+        };
+        defer img.deinit(e.gpa);
         // Drawing keeps the target's alpha: start opaque.
         img.fill(null, .{ .r = 0, .g = 0, .b = 0 });
         const whole: Rect = .{ .x = 0, .y = 0, .w = e.mapW(), .h = e.mapH() };

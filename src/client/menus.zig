@@ -14,6 +14,8 @@ const Player = @import("session.zig").Player;
 
 const k = game.constants;
 const Image = gfx.Image;
+const Assets = @import("assets.zig").Assets;
+const art_dir = "other/main_menu_gui/";
 const Canvas = gfx.Canvas;
 const Rect = gfx.Rect;
 
@@ -111,17 +113,10 @@ const Nine = struct {
 
     const names = [9][]const u8{ "top_left", "top", "top_right", "left", "center", "right", "bottom_left", "bottom", "bottom_right" };
 
-    fn load(assets: []const u8, prefix: []const u8, suffix: []const u8) Nine {
+    fn load(a: *Assets, prefix: []const u8) Assets.Error!Nine {
         var n: Nine = .{};
-        for (names, &n.pieces) |name, *p| {
-            var buf: [128]u8 = undefined;
-            p.* = loadQuiet(assets, std.fmt.bufPrint(&buf, "{s}{s}{s}", .{ prefix, name, suffix }) catch continue);
-        }
+        for (names, &n.pieces) |name, *p| p.* = try a.find(art_dir ++ "{s}{s}.png", .{ prefix, name });
         return n;
-    }
-
-    fn deinit(n: *Nine) void {
-        for (n.pieces) |p| if (p) |img| img.deinit();
     }
 
     fn draw(n: *const Nine, cv: Canvas, r: Rect) void {
@@ -150,31 +145,26 @@ const Nine = struct {
 
 /// One row of a list: ends, repeated top, middle and bottom.
 const Entry = struct {
-    top: ?Image = null,
-    left: ?Image = null,
-    center: ?Image = null,
-    right: ?Image = null,
-    bottom: ?Image = null,
+    top: Image,
+    left: Image,
+    center: Image,
+    right: Image,
+    bottom: Image,
 
-    fn load(assets: []const u8, state: []const u8) Entry {
-        var e: Entry = .{};
+    fn load(a: *Assets, state: []const u8) Assets.Error!Entry {
+        var e: Entry = undefined;
         inline for (.{ "top", "left", "center", "right", "bottom" }) |name| {
-            var buf: [96]u8 = undefined;
-            @field(e, name) = loadImage(assets, std.fmt.bufPrint(&buf, "list/list_entry_" ++ name ++ "_{s}", .{state}) catch "");
+            @field(e, name) = try a.image(art_dir ++ "list/list_entry_" ++ name ++ "_{s}.png", .{state});
         }
         return e;
     }
 
-    fn deinit(e: *Entry) void {
-        for ([_]?Image{ e.top, e.left, e.center, e.right, e.bottom }) |p| if (p) |img| img.deinit();
-    }
-
     fn draw(e: *const Entry, cv: Canvas, x: i32, y: i32, w: i32) void {
-        const l = e.left orelse return;
-        const r = e.right orelse return;
-        const t = e.top orelse return;
-        const c = e.center orelse return;
-        const b = e.bottom orelse return;
+        const l = e.left;
+        const r = e.right;
+        const t = e.top;
+        const c = e.center;
+        const b = e.bottom;
         const mid = w - l.width() - r.width();
         cv.draw(l, x, y);
         cv.draw(r, x + w - r.width(), y);
@@ -187,45 +177,38 @@ const Entry = struct {
 const ButtonLook = enum { normal, pressed, green };
 
 pub const Art = struct {
-    frame: Nine = .{},
-    warning: ?Image = null,
-    close: [2]?Image = @splat(null),
-    buttons: [3]Nine = @splat(.{}),
-    list: Nine = .{},
-    entries: [2]Entry = @splat(.{}),
-    up: [2]?Image = @splat(null),
-    down: [2]?Image = @splat(null),
-    scroller: ?Image = null,
-    radio: [4]?Image = @splat(null),
-    swatches: gfx.TeamImages = @splat(null),
+    frame: Nine,
+    warning: Image,
+    close: [2]Image,
+    buttons: [3]Nine,
+    list: Nine,
+    entries: [2]Entry,
+    up: [2]Image,
+    down: [2]Image,
+    scroller: Image,
+    radio: [4]Image,
+    swatches: [k.Team.count]Image,
 
-    pub fn load(assets: [:0]const u8, palettes: *const gfx.TeamPalettes) Art {
-        var a: Art = .{
-            .frame = .load(assets, "menu_", ""),
-            .warning = loadImage(assets, "menu_warning"),
-            .close = .{ loadImage(assets, "close_button_normal"), loadImage(assets, "close_button_pressed") },
-            .list = .load(assets, "list/list_", ""),
-            .entries = .{ .load(assets, "normal"), .load(assets, "pressed") },
-            .up = .{ loadImage(assets, "list/list_button_up_normal"), loadImage(assets, "list/list_button_up_pressed") },
-            .down = .{ loadImage(assets, "list/list_button_down_normal"), loadImage(assets, "list/list_button_down_pressed") },
-            .scroller = loadImage(assets, "list/list_scroller"),
-            .radio = .{ loadImage(assets, "radio/radio_left"), loadImage(assets, "radio/radio_center"), loadImage(assets, "radio/radio_right"), loadImage(assets, "radio/radio_selector") },
-            .swatches = gfx.loadTeamImages(palettes, "{s}/other/main_menu_gui/team_color_{s}.png", .{assets}),
+    pub fn load(a: *Assets) Assets.Error!Art {
+        var art: Art = .{
+            .frame = try .load(a, "menu_"),
+            .warning = try a.image(art_dir ++ "menu_warning.png", .{}),
+            .close = .{ try a.image(art_dir ++ "close_button_normal.png", .{}), try a.image(art_dir ++ "close_button_pressed.png", .{}) },
+            .buttons = undefined,
+            .list = try .load(a, "list/list_"),
+            .entries = .{ try .load(a, "normal"), try .load(a, "pressed") },
+            .up = .{ try a.image(art_dir ++ "list/list_button_up_normal.png", .{}), try a.image(art_dir ++ "list/list_button_up_pressed.png", .{}) },
+            .down = .{ try a.image(art_dir ++ "list/list_button_down_normal.png", .{}), try a.image(art_dir ++ "list/list_button_down_pressed.png", .{}) },
+            .scroller = try a.image(art_dir ++ "list/list_scroller.png", .{}),
+            .radio = undefined,
+            .swatches = try a.teams(art_dir ++ "team_color_{s}.png", .{}, .file),
         };
-        for (&a.buttons, [_][]const u8{ "normal", "pressed", "green" }) |*b, state| {
+        for (&art.radio, [_][]const u8{ "left", "center", "right", "selector" }) |*r, name| r.* = try a.image(art_dir ++ "radio/radio_{s}.png", .{name});
+        for (&art.buttons, [_][]const u8{ "normal", "pressed", "green" }) |*b, state| {
             var buf: [64]u8 = undefined;
-            b.* = .load(assets, std.fmt.bufPrint(&buf, "generic_button_{s}_", .{state}) catch "", "");
+            b.* = try .load(a, std.fmt.bufPrint(&buf, "generic_button_{s}_", .{state}) catch unreachable);
         }
-        return a;
-    }
-
-    pub fn deinit(a: *Art) void {
-        a.frame.deinit();
-        a.list.deinit();
-        for (&a.buttons) |*b| b.deinit();
-        for (&a.entries) |*e| e.deinit();
-        for ([_]?Image{ a.warning, a.close[0], a.close[1], a.up[0], a.up[1], a.down[0], a.down[1], a.scroller, a.radio[0], a.radio[1], a.radio[2], a.radio[3] }) |p| if (p) |img| img.deinit();
-        gfx.freeTeamImages(&a.swatches);
+        return art;
     }
 
     fn piece(img: ?Image, fallback: i32, comptime dim: enum { w, h }) i32 {
@@ -240,16 +223,6 @@ pub const Art = struct {
         return .{ .x = left, .y = piece(a.list.pieces[1], 3, .h), .w = list_w - left - right, .h = list_rows * entry_h };
     }
 };
-
-fn loadImage(assets: []const u8, name: []const u8) ?Image {
-    var buf: [512]u8 = undefined;
-    return Image.load(std.fmt.bufPrintZ(&buf, "{s}/other/main_menu_gui/{s}.png", .{ assets, name }) catch return null);
-}
-
-fn loadQuiet(assets: []const u8, name: []const u8) ?Image {
-    var buf: [512]u8 = undefined;
-    return Image.loadQuiet(std.fmt.bufPrintZ(&buf, "{s}/other/main_menu_gui/{s}.png", .{ assets, name }) catch return null);
-}
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -578,12 +551,12 @@ pub const Menu = struct {
         cv.dx += m.x;
         cv.dy += m.y;
         if (m.kind == .warning) {
-            if (art.warning) |img| cv.draw(img, 0, 0);
+            cv.draw(art.warning, 0, 0);
         } else {
             art.frame.draw(cv, .{ .x = 0, .y = 0, .w = l.w, .h = l.h });
             fonts.get(.yellow_menu).draw(cv, m.kind.title(), 8, 6);
             const c = l.close();
-            if (art.close[@intFromBool(m.isPressed(.close))]) |img| cv.draw(img, c.x, c.y);
+            cv.draw(art.close[@intFromBool(m.isPressed(.close))], c.x, c.y);
         }
         const yellow = fonts.get(.yellow_menu);
         for (l.buttons[0..l.n_buttons], 0..) |b, i| {
@@ -603,7 +576,7 @@ pub const Menu = struct {
             f.draw(cv, lb.text, x, lb.y);
         }
         for (l.radios[0..l.n_radios]) |r| drawRadio(cv, art, r);
-        for (l.swatches[0..l.n_swatches]) |s| if (art.swatches[@intFromEnum(s.team)]) |img| cv.draw(img, s.x, s.y);
+        for (l.swatches[0..l.n_swatches]) |s| cv.draw(art.swatches[@intFromEnum(s.team)], s.x, s.y);
         if (l.list) |lr| m.drawList(cv, art, fonts, ctx, lr);
     }
 
@@ -623,10 +596,10 @@ pub const Menu = struct {
         }
         const up = Layout.up(lr);
         const down = Layout.down(lr);
-        if (art.up[@intFromBool(m.isPressed(.up))]) |img| cv.draw(img, up.x, up.y);
-        if (art.down[@intFromBool(m.isPressed(.down))]) |img| cv.draw(img, down.x, down.y);
+        cv.draw(art.up[@intFromBool(m.isPressed(.up))], up.x, up.y);
+        cv.draw(art.down[@intFromBool(m.isPressed(.down))], down.x, down.y);
         // The scroller shows how far down the list is.
-        const scroller = art.scroller orelse return;
+        const scroller = art.scroller;
         const top = Art.piece(art.list.pieces[2], 3, .h);
         const space = lr.h - top - Art.piece(art.list.pieces[8], 3, .h);
         const most = @max(@as(i64, @intCast(count)) - list_rows, 0);
@@ -636,10 +609,7 @@ pub const Menu = struct {
 };
 
 fn drawRadio(cv: Canvas, art: *const Art, r: Radio) void {
-    const left = art.radio[0] orelse return;
-    const center = art.radio[1] orelse return;
-    const right = art.radio[2] orelse return;
-    const selector = art.radio[3] orelse return;
+    const left, const center, const right, const selector = art.radio;
     const w = r.width();
     cv.draw(left, r.x, r.y);
     cv.draw(right, r.x + w - radio_right, r.y);
@@ -853,7 +823,10 @@ fn clickAt(ms: *Menus, art: *const Art, ctx: Context, kind: Kind, x: i32, y: i32
 }
 
 test "menus open each other and give commands" {
-    const art: Art = .{};
+    const a = try Assets.init(testing.allocator, "bin/assets");
+    defer a.deinit();
+    const art: Art = try .load(a);
+    try testing.expectEqual(0, a.missing);
     var ms: Menus = .{};
     const ctx: Context = .{ .team = .red };
     ms.show(.main, false);
@@ -891,7 +864,10 @@ test "menus open each other and give commands" {
 }
 
 test "teams, bots, maps" {
-    const art: Art = .{};
+    const a = try Assets.init(testing.allocator, "bin/assets");
+    defer a.deinit();
+    const art: Art = try .load(a);
+    try testing.expectEqual(0, a.missing);
     var ms: Menus = .{};
     const players = [_]Player{.{ .id = 2, .team = .blue, .mode = .bot }};
     const maps = [_][]const u8{ "a.map", "b.map" };

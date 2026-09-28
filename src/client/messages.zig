@@ -12,6 +12,7 @@ const k = game.constants;
 const Object = game.object.Object;
 const World = game.world.World;
 const Image = gfx.Image;
+const Assets = @import("assets.zig").Assets;
 const Canvas = gfx.Canvas;
 const Rect = gfx.Rect;
 
@@ -72,34 +73,23 @@ pub const News = struct {
 pub const Message = enum { robot_manufactured, vehicle_manufactured, gun_manufactured, fort_under_attack };
 
 pub const Images = struct {
-    messages: [4]?Image = @splat(null),
-    gun: ?Image = null,
-    click_to_resume: ?Image = null,
-    vote: ?Image = null,
+    messages: [4]Image,
+    gun: Image,
+    click_to_resume: Image,
+    vote: Image,
 
-    pub fn load(assets: []const u8) Images {
-        const one = struct {
-            fn f(a: []const u8, comptime path: []const u8) ?Image {
-                var buf: [512]u8 = undefined;
-                return Image.load(std.fmt.bufPrintZ(&buf, "{s}/other/" ++ path, .{a}) catch return null);
-            }
-        }.f;
+    pub fn load(a: *Assets) Assets.Error!Images {
         return .{
             .messages = .{
-                one(assets, "comp_messages/robot_manufactured.png"),
-                one(assets, "comp_messages/vehicle_manufactured.png"),
-                one(assets, "comp_messages/gun_manufactured.png"),
-                one(assets, "comp_messages/fort_under_attack.png"),
+                try a.image("other/comp_messages/robot_manufactured.png", .{}),
+                try a.image("other/comp_messages/vehicle_manufactured.png", .{}),
+                try a.image("other/comp_messages/gun_manufactured.png", .{}),
+                try a.image("other/comp_messages/fort_under_attack.png", .{}),
             },
-            .gun = one(assets, "comp_messages/gun.png"),
-            .click_to_resume = one(assets, "comp_messages/click_to_resume.png"),
-            .vote = one(assets, "menus/vote_in_progress.png"),
+            .gun = try a.image("other/comp_messages/gun.png", .{}),
+            .click_to_resume = try a.image("other/comp_messages/click_to_resume.png", .{}),
+            .vote = try a.image("other/menus/vote_in_progress.png", .{}),
         };
-    }
-
-    pub fn deinit(m: *Images) void {
-        for (m.messages) |i| if (i) |img| img.deinit();
-        for ([_]?Image{ m.gun, m.click_to_resume, m.vote }) |i| if (i) |img| img.deinit();
     }
 };
 
@@ -154,28 +144,29 @@ pub const Notices = struct {
         return out[0..n];
     }
 
-    fn messageRect(images: *const Images, msg: Message, area: Rect) ?Rect {
-        const img = images.messages[@intFromEnum(msg)] orelse return null;
+    fn messageRect(images: *const Images, msg: Message, area: Rect) Rect {
+        const img = images.messages[@intFromEnum(msg)];
         return .{ .x = area.x + ((area.w - img.width()) >> 1), .y = area.y + 20, .w = img.width(), .h = img.height() };
     }
 
-    fn resumeRect(images: *const Images, area: Rect) ?Rect {
-        const img = images.click_to_resume orelse return null;
+    fn resumeRect(images: *const Images, area: Rect) Rect {
+        const img = images.click_to_resume;
         return .{ .x = area.x + ((area.w - img.width()) >> 1), .y = area.y + ((area.h - img.height()) >> 1), .w = img.width(), .h = img.height() };
     }
 
     /// A click at screen point (x, y) on one of the notices.
     pub fn click(n: *Notices, world: *const World, team: k.Team, paused: bool, images: *const Images, area: Rect, x: i32, y: i32, time: f64) ?Click {
         if (n.shown) |s| if (n.visible(time) != null or time - s.start < flashes * flash_time) {
-            if (messageRect(images, s.msg, area)) |r| if (within(r, x, y)) {
+            if (within(messageRect(images, s.msg, area), x, y)) {
                 return switch (s.msg) {
                     .robot_manufactured, .vehicle_manufactured => .{ .select = s.ref_id },
                     .gun_manufactured => .{ .open = s.ref_id },
                     .fort_under_attack => .{ .look = s.ref_id },
                 };
-            };
+            }
         };
-        if (images.gun) |gun| {
+        {
+            const gun = images.gun;
             var buf: [max_guns]*Object = undefined;
             var gy = area.y + 8;
             for (gunBuildings(world, team, &buf)) |o| {
@@ -183,7 +174,7 @@ pub const Notices = struct {
                 gy += 2 + gun.height();
             }
         }
-        if (paused) if (resumeRect(images, area)) |r| if (within(r, x, y)) return .resume_game;
+        if (paused and within(resumeRect(images, area), x, y)) return .resume_game;
         return null;
     }
 
@@ -200,10 +191,12 @@ pub const Notices = struct {
     };
 
     pub fn draw(n: *Notices, cv: Canvas, world: *const World, team: k.Team, paused: bool, vote: ?Vote, images: *const Images, fonts: *const font.Fonts, area: Rect, time: f64) void {
-        if (n.visible(time)) |msg| if (messageRect(images, msg, area)) |r| {
-            cv.draw(images.messages[@intFromEnum(msg)].?, r.x, r.y);
-        };
-        if (images.gun) |gun| {
+        if (n.visible(time)) |msg| {
+            const r = messageRect(images, msg, area);
+            cv.draw(images.messages[@intFromEnum(msg)], r.x, r.y);
+        }
+        {
+            const gun = images.gun;
             var buf: [max_guns]*Object = undefined;
             var gy = area.y + 8;
             const small = fonts.get(.small_white);
@@ -217,8 +210,12 @@ pub const Notices = struct {
                 gy += 2 + gun.height();
             }
         }
-        if (paused) if (resumeRect(images, area)) |r| cv.draw(images.click_to_resume.?, r.x, r.y);
-        if (vote) |v| if (images.vote) |box| {
+        if (paused) {
+            const r = resumeRect(images, area);
+            cv.draw(images.click_to_resume, r.x, r.y);
+        }
+        if (vote) |v| {
+            const box = images.vote;
             const x = area.x + area.w - box.width() - 4;
             const y = area.y + 4;
             cv.drawAlpha(box, x, y, 200);
@@ -243,7 +240,7 @@ pub const Notices = struct {
             centered(f, cv, std.fmt.bufPrint(&nb[1], "{d}", .{v.needed}) catch "", x + 57, y + 64);
             centered(f, cv, std.fmt.bufPrint(&nb[2], "{d}", .{v.yes}) catch "", x + 22, y + 64);
             centered(f, cv, std.fmt.bufPrint(&nb[3], "{d}", .{v.no}) catch "", x + 91, y + 64);
-        };
+        }
     }
 };
 

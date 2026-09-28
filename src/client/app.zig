@@ -5,6 +5,7 @@ const c = @import("c");
 const game = @import("../game.zig");
 const net = @import("../net.zig");
 const gfx = @import("gfx.zig");
+const Assets = @import("assets.zig").Assets;
 const terrain_mod = @import("terrain.zig");
 const font = @import("font.zig");
 const Sprites = @import("sprites.zig").Sprites;
@@ -41,7 +42,8 @@ pub const Options = struct {
 pub const App = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
-    assets: [:0]const u8,
+    /// All the art.
+    assets: *Assets,
     options: Options,
     display: Display,
     /// The window's size (the frame's).
@@ -49,7 +51,6 @@ pub const App = struct {
     height: i32,
 
     terrain_info: *game.map.Terrain,
-    palettes: gfx.TeamPalettes,
     sheets: terrain_mod.Sheets,
     terrain: ?terrain_mod.Terrain = null,
     fonts: font.Fonts,
@@ -116,15 +117,17 @@ pub const App = struct {
     focused: bool = false,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io, data_path: []const u8, options: Options) !*App {
-        const assets = try std.fmt.allocPrintSentinel(gpa, "{s}/assets", .{data_path}, 0);
-        errdefer gpa.free(assets);
+        const dir = try std.fmt.allocPrint(gpa, "{s}/assets", .{data_path});
+        defer gpa.free(dir);
+        const assets = try Assets.init(gpa, dir);
+        errdefer assets.deinit();
 
         const terrain_info = try gpa.create(game.map.Terrain);
         errdefer gpa.destroy(terrain_info);
         {
-            var dir = try std.Io.Dir.cwd().openDir(io, assets, .{});
-            defer dir.close(io);
-            terrain_info.* = try game.map.Terrain.load(io, dir);
+            var d = try std.Io.Dir.cwd().openDir(io, dir, .{});
+            defer d.close(io);
+            terrain_info.* = try game.map.Terrain.load(io, d);
         }
 
         const conn = net.conn.Conn.connect(options.host, options.port) catch |err| {
@@ -132,12 +135,11 @@ pub const App = struct {
             return err;
         };
 
-        var display = try Display.open("Zod Engine", options.width, options.height, options.fullscreen);
+        var display = try Display.open(gpa, "Zod Engine", options.width, options.height, options.fullscreen);
         errdefer display.close();
 
         const app = try gpa.create(App);
         errdefer gpa.destroy(app);
-        const palettes = gfx.TeamPalettes.load(assets);
         app.* = .{
             .gpa = gpa,
             .io = io,
@@ -147,7 +149,6 @@ pub const App = struct {
             .width = display.frame.w,
             .height = display.frame.h,
             .terrain_info = terrain_info,
-            .palettes = palettes,
             .sheets = undefined,
             .fonts = undefined,
             .sprites = undefined,
@@ -165,17 +166,17 @@ pub const App = struct {
             .prng = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
             .clock_origin = std.Io.Clock.awake.now(io),
         };
-        app.sheets = terrain_mod.Sheets.load(assets, &app.palettes);
-        app.fonts = font.Fonts.load(assets);
-        app.hud = .init(assets, &app.palettes, &app.fonts);
-        app.cursors = .load(assets, &app.palettes);
-        app.window_images = .load(assets);
-        app.list_images = .load(assets);
-        app.msg_images = .load(assets);
-        app.menu_art = .load(assets, &app.palettes);
-        app.sounds.init(assets);
-        app.sprites = try Sprites.load(gpa, assets, &app.palettes);
-        app.fx = Effects.init(gpa, app.sprites, &app.palettes, app.prng.random());
+        app.sheets = try .load(assets);
+        app.fonts = try .load(assets);
+        app.hud = try .init(assets, &app.fonts);
+        app.cursors = try .load(assets);
+        app.window_images = try .load(assets);
+        app.list_images = try .load(assets);
+        app.msg_images = try .load(assets);
+        app.menu_art = try .load(assets);
+        app.sounds.init(assets.dir);
+        app.sprites = try Sprites.load(assets);
+        app.fx = Effects.init(gpa, app.sprites, &assets.palettes, app.prng.random());
         app.objects = Renderer.init(gpa, app.sprites, &app.fonts, &app.fx);
         try app.session.start();
         return app;
@@ -186,23 +187,14 @@ pub const App = struct {
         if (app.terrain) |*t| t.deinit();
         app.objects.deinit();
         app.fx.deinit();
-        app.hud.deinit();
-        app.cursors.deinit();
         app.closeWindow();
-        app.window_images.deinit();
-        app.list_images.deinit();
-        app.msg_images.deinit();
-        app.menu_art.deinit();
         app.sounds.deinit();
         app.news.deinit();
         app.control.deinit();
         if (app.chat) |*t| t.deinit(gpa);
-        app.sprites.deinit();
-        app.fonts.deinit();
-        app.sheets.deinit();
         app.session.deinit();
         gpa.destroy(app.terrain_info);
-        gpa.free(app.assets);
+        app.assets.deinit();
         app.display.close();
         gpa.destroy(app);
     }
@@ -969,7 +961,7 @@ pub const App = struct {
     /// The gun being placed, on the tile under the mouse (dimmed where it
     /// can't go).
     fn drawPlacing(app: *App, cv: gfx.Canvas, world: *const game.world.World, building: i32, gun: k.Cannon) void {
-        const img = app.sprites.cannon[@intFromEnum(gun)].passive[@intFromEnum(app.control.team)][4] orelse return;
+        const img = app.sprites.cannon[@intFromEnum(gun)].passive[@intFromEnum(app.control.team)][4];
         const p = app.mouseMap();
         const tx = @divFloor(p[0], k.tile_size);
         const ty = @divFloor(p[1], k.tile_size);
@@ -1001,7 +993,7 @@ pub const App = struct {
             app.objects.draw(cv, world, v);
             app.objects.drawAfter(cv, world, v);
             app.fx.draw(cv, v);
-            app.control.drawSelection(cv, world, &app.palettes, &app.fonts, time);
+            app.control.drawSelection(cv, world, &app.assets.palettes, &app.fonts, time);
             if (app.window) |*w| {
                 // Gone, or no longer ours.
                 const b = world.find(w.building);
@@ -1011,7 +1003,7 @@ pub const App = struct {
             if (app.placing) |pl| app.drawPlacing(cv, world, pl.building, pl.gun);
             if (app.drag) |d| {
                 const p = app.mouseMap();
-                drawSelectionBox(cv, &app.palettes, app.control.team, d[0], d[1], p[0], p[1], time);
+                drawSelectionBox(cv, &app.assets.palettes, app.control.team, d[0], d[1], p[0], p[1], time);
                 // The box selects as it grows.
                 app.control.selectBox(world, d[0], d[1], p[0], p[1], app.prng.random());
             }

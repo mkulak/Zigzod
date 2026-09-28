@@ -6,6 +6,7 @@ const std = @import("std");
 const k = @import("../game/constants.zig");
 const mapfmt = @import("../game/map.zig");
 const gfx = @import("gfx.zig");
+const Assets = @import("assets.zig").Assets;
 
 const Image = gfx.Image;
 const tile = k.tile_size;
@@ -14,65 +15,53 @@ const sheet_columns = 20;
 const max_crater_types = 7;
 const max_crater_images = 7;
 
-/// Crater images for one kind of ground (tiles name their crater type).
+/// Crater images for one kind of ground (tiles name their crater type):
+/// as many as there are files.
 const Craters = struct {
-    small: [max_crater_images]Image = undefined,
-    small_n: u8 = 0,
-    large: [max_crater_images]Image = undefined,
-    large_n: u8 = 0,
+    small: []const Image = &.{},
+    large: []const Image = &.{},
 
-    fn load(c: *Craters, assets: []const u8, planet: []const u8, t: usize) void {
+    fn load(a: *Assets, planet: []const u8, t: usize) Assets.Error!Craters {
+        var c: Craters = .{};
         inline for (.{ "small", "large" }) |size| {
-            const imgs = &@field(c, size);
-            const n = &@field(c, size ++ "_n");
-            while (n.* < max_crater_images) : (n.* += 1) {
-                var buf: [256]u8 = undefined;
-                const path = std.fmt.bufPrintZ(&buf, "{s}/planets/craters/crater_" ++ size ++ "_{s}_t{d:0>2}_n{d:0>2}.png", .{ assets, planet, t, n.* }) catch break;
-                imgs[n.*] = Image.loadQuiet(path) orelse break;
+            var found: std.ArrayList(Image) = .empty;
+            while (found.items.len < max_crater_images) {
+                const img = try a.find("planets/craters/crater_" ++ size ++ "_{s}_t{d:0>2}_n{d:0>2}.png", .{ planet, t, found.items.len }) orelse break;
+                try found.append(a.allocator(), img);
             }
+            @field(c, size) = found.items;
         }
+        return c;
     }
 
     fn images(c: *const Craters, big: bool) []const Image {
-        return if (big) c.large[0..c.large_n] else c.small[0..c.small_n];
+        return if (big) c.large else c.small;
     }
 };
 
 /// Images shared by all maps.
 pub const Sheets = struct {
-    planets: [k.Planet.count]?Image = @splat(null),
-    zone_marker: gfx.TeamImages = @splat(null),
-    zone_marker_water: gfx.TeamImages = @splat(null),
+    planets: [k.Planet.count]Image,
+    zone_marker: [k.Team.count]Image,
+    zone_marker_water: [k.Team.count]Image,
     craters: [k.Planet.count][max_crater_types]Craters = @splat(@splat(.{})),
 
-    pub fn load(assets: []const u8, palettes: *const gfx.TeamPalettes) Sheets {
-        var s: Sheets = .{};
-        for (&s.planets, 0..) |*p, i| {
-            var buf: [256]u8 = undefined;
-            const path = std.fmt.bufPrintZ(&buf, "{s}/planets/{s}.bmp", .{ assets, @tagName(@as(k.Planet, @enumFromInt(i))) }) catch continue;
-            p.* = Image.load(path);
-        }
-        s.zone_marker = gfx.loadTeamImages(palettes, "{s}/planets/zone_marker_{s}.png", .{assets});
-        s.zone_marker_water = gfx.loadTeamImages(palettes, "{s}/planets/zone_marker_water_{s}.png", .{assets});
+    pub fn load(a: *Assets) Assets.Error!Sheets {
+        var s: Sheets = .{
+            .planets = undefined,
+            .zone_marker = try a.teams("planets/zone_marker_{s}.png", .{}, .file),
+            .zone_marker_water = try a.teams("planets/zone_marker_water_{s}.png", .{}, .file),
+        };
+        for (&s.planets, 0..) |*p, i| p.* = try a.image("planets/{s}.bmp", .{@tagName(@as(k.Planet, @enumFromInt(i)))});
         for (&s.craters, 0..) |*planet, p| {
             const types: usize = switch (@as(k.Planet, @enumFromInt(p))) {
                 .desert => 7,
                 .volcanic, .jungle, .city => 3,
                 .arctic => 2,
             };
-            for (planet[0..types], 0..) |*cr, t| cr.load(assets, @tagName(@as(k.Planet, @enumFromInt(p))), t);
+            for (planet[0..types], 0..) |*cr, t| cr.* = try .load(a, @tagName(@as(k.Planet, @enumFromInt(p))), t);
         }
         return s;
-    }
-
-    pub fn deinit(s: *Sheets) void {
-        for (s.planets) |p| if (p) |img| img.deinit();
-        gfx.freeTeamImages(&s.zone_marker);
-        gfx.freeTeamImages(&s.zone_marker_water);
-        for (&s.craters) |*planet| for (planet) |*cr| {
-            for (cr.small[0..cr.small_n]) |img| img.deinit();
-            for (cr.large[0..cr.large_n]) |img| img.deinit();
-        };
     }
 };
 
@@ -114,24 +103,24 @@ pub const Terrain = struct {
     markers: std.ArrayList(Marker) = .empty,
 
     pub fn init(gpa: std.mem.Allocator, sheets: *const Sheets, terrain: *const mapfmt.Terrain, m: *const mapfmt.Map, rng: std.Random) !Terrain {
-        const sheet = sheets.planets[m.header.terrain] orelse return error.MissingTileSheet;
-        const ground = Image.create(m.widthPixels(), m.heightPixels()) orelse return error.OutOfMemory;
-        errdefer ground.deinit();
-        // Blits keep the target's alpha, so start opaque.
-        ground.fill(null, .{ .r = 0, .g = 0, .b = 0 });
         const palette = terrain.palette(m.planet());
-
-        var t: Terrain = .{
-            .gpa = gpa,
-            .sheets = sheets,
-            .sheet = sheet,
-            .palette = palette,
-            .planet = m.planet(),
-            .width = m.header.width,
-            .height = m.header.height,
-            .ground = ground,
-            .tiles = try gpa.dupe(u16, m.tiles),
-            .stamped = &.{},
+        var t: Terrain = blk: {
+            const ground = try Image.create(gpa, m.widthPixels(), m.heightPixels());
+            errdefer ground.deinit(gpa);
+            // Blits keep the target's alpha, so start opaque.
+            ground.fill(null, .{ .r = 0, .g = 0, .b = 0 });
+            break :blk .{
+                .gpa = gpa,
+                .sheets = sheets,
+                .sheet = sheets.planets[m.header.terrain],
+                .palette = palette,
+                .planet = m.planet(),
+                .width = m.header.width,
+                .height = m.header.height,
+                .ground = ground,
+                .tiles = try gpa.dupe(u16, m.tiles),
+                .stamped = &.{},
+            };
         };
         errdefer t.deinit();
         t.stamped = try gpa.alloc(bool, m.tiles.len);
@@ -156,14 +145,14 @@ pub const Terrain = struct {
             if (info.is_water and !info.is_effect) try t.water.append(gpa, .{ .tile = @intCast(i) });
         }
 
-        for (t.tiles, 0..) |_, i| t.drawTile(ground, @intCast(i), 0, 0);
+        for (t.tiles, 0..) |_, i| t.drawTile(t.ground, @intCast(i), 0, 0);
         try t.findMarkers(m);
         return t;
     }
 
     pub fn deinit(t: *Terrain) void {
         const gpa = t.gpa;
-        t.ground.deinit();
+        t.ground.deinit(gpa);
         gpa.free(t.tiles);
         gpa.free(t.stamped);
         t.animating.deinit(gpa);
@@ -223,7 +212,7 @@ pub const Terrain = struct {
         for (t.markers.items) |*mk| {
             const owner = if (mk.zone < zones.len) zones[mk.zone].owner else .none;
             const images = if (mk.water) &t.sheets.zone_marker_water else &t.sheets.zone_marker;
-            const img = images[@intFromEnum(owner)] orelse continue;
+            const img = images[@intFromEnum(owner)];
             if (!view.contains(mk.x, mk.y) and !view.contains(mk.x + img.width(), mk.y + img.height())) continue;
             var y = mk.y;
             if (mk.water) {
@@ -382,9 +371,9 @@ test "render a map and animate it" {
     var m = try mapfmt.Map.load(io, std.Io.Dir.cwd(), "Data/Campaing/Z_original/p02_bb_orig01.map", gpa);
     defer m.deinit(gpa);
 
-    const palettes = gfx.TeamPalettes.load("bin/assets");
-    var sheets = Sheets.load("bin/assets", &palettes);
-    defer sheets.deinit();
+    const a = try Assets.init(gpa, "bin/assets");
+    defer a.deinit();
+    const sheets = try Sheets.load(a);
     var prng = std.Random.DefaultPrng.init(1);
     var t = try Terrain.init(gpa, &sheets, info, &m, prng.random());
     defer t.deinit();
@@ -392,10 +381,10 @@ test "render a map and animate it" {
 
     // The first tile of the ground is the sheet's tile.
     const first = Terrain.sheetRect(t.tiles[0]);
-    try std.testing.expectEqual(sheets.planets[m.header.terrain].?.pixel(first.x + 3, first.y + 5), t.ground.pixel(3, 5));
+    try std.testing.expectEqual(sheets.planets[m.header.terrain].pixel(first.x + 3, first.y + 5), t.ground.pixel(3, 5));
 
-    const screen = Image.create(640, 480).?;
-    defer screen.deinit();
+    const screen = try Image.create(gpa, 640, 480);
+    defer screen.deinit(gpa);
     screen.fill(null, .{ .r = 0, .g = 0, .b = 0 });
     var zones = [_]mapfmt.Zone{mapfmt.Zone.fromRect(0, m.zones[0])};
     zones[0].owner = .blue;

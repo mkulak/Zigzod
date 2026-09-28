@@ -47,13 +47,16 @@ pub const Color = struct {
 
 const amask = 0xFF000000;
 
-/// An image: ARGB pixels (0xAARRGGBB), row after row.
+/// An image: ARGB pixels (0xAARRGGBB), row after row. Whoever creates
+/// one decides which allocator owns it (loaded art lives in the assets'
+/// arena, see assets.zig).
 pub const Image = struct {
     w: i32,
     h: i32,
     pixels: [*]u32,
 
-    const gpa = std.heap.c_allocator;
+    pub const Error = std.mem.Allocator.Error;
+    pub const LoadError = error{ImageUnreadable} || Error;
 
     pub fn width(img: Image) i32 {
         return img.w;
@@ -71,38 +74,30 @@ pub const Image = struct {
         return img.pixels[0..img.len()];
     }
 
-    pub fn deinit(img: Image) void {
+    pub fn deinit(img: Image, gpa: std.mem.Allocator) void {
         gpa.free(img.all());
     }
 
     /// A new, fully transparent image.
-    pub fn create(w: i32, h: i32) ?Image {
-        if (w <= 0 or h <= 0) return null;
-        const pixels = gpa.alloc(u32, @as(usize, @intCast(w)) * @as(usize, @intCast(h))) catch return null;
+    pub fn create(gpa: std.mem.Allocator, w: i32, h: i32) Error!Image {
+        std.debug.assert(w > 0 and h > 0);
+        const pixels = try gpa.alloc(u32, @as(usize, @intCast(w)) * @as(usize, @intCast(h)));
         @memset(pixels, 0);
         return .{ .w = w, .h = h, .pixels = pixels.ptr };
     }
 
-    /// Load a BMP or PNG file; null (and a message) if missing.
-    pub fn load(path: [:0]const u8) ?Image {
-        return loadQuiet(path) orelse {
-            std.log.warn("could not load: {s}", .{path});
-            return null;
-        };
-    }
-
-    /// Like `load`, for files that may legitimately be missing.
-    pub fn loadQuiet(path: [:0]const u8) ?Image {
-        const raw: *c.SDL_Surface = c.SDL_LoadSurface(path.ptr) orelse return null;
+    /// Read a BMP or PNG file.
+    pub fn load(gpa: std.mem.Allocator, path: [:0]const u8) LoadError!Image {
+        const raw: *c.SDL_Surface = c.SDL_LoadSurface(path.ptr) orelse return error.ImageUnreadable;
         defer c.SDL_DestroySurface(raw);
-        return fromSurface(raw);
+        return fromSurface(gpa, raw);
     }
 
     /// A copy of an SDL surface (formats without alpha come out opaque).
-    pub fn fromSurface(s: *c.SDL_Surface) ?Image {
-        const argb: *c.SDL_Surface = c.SDL_ConvertSurface(s, c.SDL_PIXELFORMAT_ARGB8888) orelse return null;
+    pub fn fromSurface(gpa: std.mem.Allocator, s: *c.SDL_Surface) LoadError!Image {
+        const argb: *c.SDL_Surface = c.SDL_ConvertSurface(s, c.SDL_PIXELFORMAT_ARGB8888) orelse return error.ImageUnreadable;
         defer c.SDL_DestroySurface(argb);
-        const img = create(argb.w, argb.h) orelse return null;
+        const img = try create(gpa, argb.w, argb.h);
         const base: [*]const u8 = @ptrCast(argb.pixels.?);
         var y: i32 = 0;
         while (y < img.h) : (y += 1) {
@@ -117,8 +112,8 @@ pub const Image = struct {
         return c.SDL_CreateSurfaceFrom(img.w, img.h, c.SDL_PIXELFORMAT_ARGB8888, img.pixels, img.w * 4);
     }
 
-    pub fn clone(img: Image) ?Image {
-        const out = create(img.w, img.h) orelse return null;
+    pub fn clone(img: Image, gpa: std.mem.Allocator) Error!Image {
+        const out = try create(gpa, img.w, img.h);
         @memcpy(out.all(), img.all());
         return out;
     }
@@ -151,9 +146,9 @@ pub const Image = struct {
     /// A new image of this one turned `angle` degrees counterclockwise and
     /// scaled by `zoom`, nearest pixel (SDL_gfx's rotozoomSurface without
     /// smoothing, whose fixed-point stepping this follows).
-    pub fn rotozoom(img: Image, angle: f64, zoom_in: f64) ?Image {
+    pub fn rotozoom(img: Image, gpa: std.mem.Allocator, angle: f64, zoom_in: f64) Error!Image {
         const zoom = @max(@abs(zoom_in), 0.001);
-        if (@abs(angle) <= 0.001) return img.zoomed(zoom);
+        if (@abs(angle) <= 0.001) return img.zoomed(gpa, zoom);
         const rad = angle * (std.math.pi / 180.0);
         const sin = @sin(rad) * zoom;
         const cos = @cos(rad) * zoom;
@@ -161,7 +156,7 @@ pub const Image = struct {
         const hh: f64 = @floatFromInt(img.height() >> 1);
         const half_w: i32 = @max(@as(i32, @intFromFloat(@ceil(@max(@abs(cos * hw + sin * hh), @abs(cos * hw - sin * hh))))), 1);
         const half_h: i32 = @max(@as(i32, @intFromFloat(@ceil(@max(@abs(sin * hw + cos * hh), @abs(sin * hw - cos * hh))))), 1);
-        const out = create(2 * half_w, 2 * half_h) orelse return null;
+        const out = try create(gpa, 2 * half_w, 2 * half_h);
         const w = img.width();
         const h = img.height();
         const zoominv = 65536.0 / (zoom * zoom);
@@ -191,10 +186,10 @@ pub const Image = struct {
     }
 
     /// Scaled by `zoom`, nearest pixel.
-    fn zoomed(img: Image, zoom: f64) ?Image {
+    fn zoomed(img: Image, gpa: std.mem.Allocator, zoom: f64) Error!Image {
         const w = img.width();
         const h = img.height();
-        const out = create(@max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(w)) * zoom)), 1), @max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(h)) * zoom)), 1)) orelse return null;
+        const out = try create(gpa, @max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(w)) * zoom)), 1), @max(@as(i32, @intFromFloat(@as(f64, @floatFromInt(h)) * zoom)), 1));
         var y: i32 = 0;
         while (y < out.height()) : (y += 1) {
             const src = img.row(@divTrunc(y * h, out.height()));
@@ -402,15 +397,18 @@ pub const TeamPalettes = struct {
     replace: [k.Team.count][size]u32 = @splat(@splat(0)),
     loaded: [k.Team.count]bool = @splat(false),
 
-    pub fn load(assets: [:0]const u8) TeamPalettes {
+    pub fn load(gpa: std.mem.Allocator, assets: []const u8) TeamPalettes {
         var p: TeamPalettes = .{};
         for (0..k.Team.count) |i| {
             const team: k.Team = @enumFromInt(i);
             if (team == .none or team == .red) continue;
             var buf: [256]u8 = undefined;
             const path = std.fmt.bufPrintZ(&buf, "{s}/teams/{s}_palette.bmp", .{ assets, team.name() }) catch continue;
-            const img = Image.load(path) orelse continue;
-            defer img.deinit();
+            const img = Image.load(gpa, path) catch |err| {
+                std.log.warn("could not load {s}: {t}", .{ path, err });
+                continue;
+            };
+            defer img.deinit(gpa);
             if (img.width() != 2) continue;
             var j: i32 = 0;
             while (j < @min(img.height(), size)) : (j += 1) {
@@ -439,9 +437,9 @@ pub const TeamPalettes = struct {
     }
 
     /// `red_version` recolored for `team`.
-    pub fn make(p: *const TeamPalettes, team: k.Team, red_version: Image) ?Image {
+    pub fn make(p: *const TeamPalettes, gpa: std.mem.Allocator, team: k.Team, red_version: Image) Image.Error!Image {
         const t = @intFromEnum(team);
-        const img = red_version.clone() orelse return null;
+        const img = try red_version.clone(gpa);
         if (!p.loaded[t]) return img;
         var it = img.rows();
         while (it.next()) |r| for (r) |*px| {
@@ -452,36 +450,6 @@ pub const TeamPalettes = struct {
     }
 };
 
-/// One image per team: null and red are files (`fmt` with the team name),
-/// the others are recolored from red.
-pub const TeamImages = [k.Team.count]?Image;
-
-pub fn loadTeamImages(palettes: *const TeamPalettes, comptime fmt: []const u8, args: anytype) TeamImages {
-    var images: TeamImages = @splat(null);
-    for (0..k.Team.count) |i| {
-        const team: k.Team = @enumFromInt(i);
-        if (team == .none or team == .red) {
-            var buf: [512]u8 = undefined;
-            const path = std.fmt.bufPrintZ(&buf, fmt, args ++ .{team.name()}) catch continue;
-            // Some things have no neutral version.
-            images[i] = if (team == .none) Image.loadQuiet(path) else Image.load(path);
-        }
-    }
-    if (images[@intFromEnum(k.Team.red)]) |red| {
-        for (0..k.Team.count) |i| {
-            if (images[i] == null) images[i] = palettes.make(@enumFromInt(i), red);
-        }
-    }
-    return images;
-}
-
-pub fn freeTeamImages(images: *TeamImages) void {
-    for (images) |*img| if (img.*) |i| {
-        i.deinit();
-        img.* = null;
-    };
-}
-
 test "clipping" {
     const a = Rect{ .x = 0, .y = 0, .w = 10, .h = 10 };
     const b = Rect{ .x = 5, .y = -5, .w = 10, .h = 10 };
@@ -490,8 +458,9 @@ test "clipping" {
 }
 
 test "images, recoloring and drawing" {
-    const img = Image.create(4, 2).?;
-    defer img.deinit();
+    const gpa = std.testing.allocator;
+    const img = try Image.create(gpa, 4, 2);
+    defer img.deinit(gpa);
     img.fill(null, .{ .r = 223, .g = 0, .b = 0 });
     img.fill(.{ .x = 0, .y = 0, .w = 1, .h = 1 }, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
@@ -500,14 +469,14 @@ test "images, recoloring and drawing" {
     p.base[blue][0] = 0xDF0000;
     p.replace[blue][0] = 0x1337FB;
     p.loaded[blue] = true;
-    const recolored = p.make(.blue, img).?;
-    defer recolored.deinit();
+    const recolored = try p.make(gpa, .blue, img);
+    defer recolored.deinit(gpa);
     try std.testing.expectEqual(Color{ .r = 0x13, .g = 0x37, .b = 0xFB }, recolored.pixel(1, 0));
     // Transparent pixels stay.
     try std.testing.expectEqual(@as(u8, 0), recolored.pixel(0, 0).a);
 
-    const screen = Image.create(8, 8).?;
-    defer screen.deinit();
+    const screen = try Image.create(gpa, 8, 8);
+    defer screen.deinit(gpa);
     screen.fill(null, .{ .r = 0, .g = 0, .b = 0 });
     const cv: Canvas = .{ .target = screen, .clip = .{ .x = 0, .y = 0, .w = 6, .h = 8 }, .dx = 2 };
     cv.drawHit(recolored, 3, 0);
@@ -523,20 +492,21 @@ test "images, recoloring and drawing" {
 
 test "rotating and scaling" {
     // A 4x2 image: left half red, right half blue.
-    const img = Image.create(4, 2).?;
-    defer img.deinit();
+    const gpa = std.testing.allocator;
+    const img = try Image.create(gpa, 4, 2);
+    defer img.deinit(gpa);
     for (0..2) |y| for (img.row(@intCast(y)), 0..) |*p, x| {
         p.* = if (x < 2) 0xFFFF0000 else 0xFF0000FF;
     };
-    const big = img.rotozoom(0, 2).?;
-    defer big.deinit();
+    const big = try img.rotozoom(gpa, 0, 2);
+    defer big.deinit(gpa);
     try std.testing.expectEqual(8, big.width());
     try std.testing.expectEqual(4, big.height());
     try std.testing.expectEqual(0xFFFF0000, big.row(3)[3]);
     try std.testing.expectEqual(0xFF0000FF, big.row(3)[4]);
     // A quarter turn counterclockwise: the right half ends up on top.
-    const turned = img.rotozoom(90, 1).?;
-    defer turned.deinit();
+    const turned = try img.rotozoom(gpa, 90, 1);
+    defer turned.deinit(gpa);
     try std.testing.expectEqual(4, turned.width());
     try std.testing.expectEqual(4, turned.height());
     try std.testing.expectEqual(0xFF0000FF, turned.row(1)[1]);

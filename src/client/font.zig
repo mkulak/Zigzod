@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const gfx = @import("gfx.zig");
+const Assets = @import("assets.zig").Assets;
 
 pub const Kind = enum {
     big_white,
@@ -15,24 +16,13 @@ pub const Kind = enum {
 const max_characters = 255;
 
 pub const Font = struct {
+    /// Most characters have no glyph.
     glyphs: [max_characters]?gfx.Image = @splat(null),
 
-    pub fn load(assets: []const u8, kind: Kind) Font {
+    pub fn load(a: *Assets, kind: Kind) Assets.Error!Font {
         var f: Font = .{};
-        for (&f.glyphs, 0..) |*g, i| {
-            var buf: [256]u8 = undefined;
-            const path = std.fmt.bufPrintZ(&buf, "{s}/fonts/{s}/char_{d:0>3}.png", .{ assets, @tagName(kind), i }) catch continue;
-            // Most characters have no glyph; don't complain about them.
-            g.* = gfx.Image.loadQuiet(path);
-        }
+        for (&f.glyphs, 0..) |*g, i| g.* = try a.find("fonts/{s}/char_{d:0>3}.png", .{ @tagName(kind), i });
         return f;
-    }
-
-    pub fn deinit(f: *Font) void {
-        for (&f.glyphs) |*g| if (g.*) |img| {
-            img.deinit();
-            g.* = null;
-        };
     }
 
     fn glyph(f: *const Font, ch: u8) ?gfx.Image {
@@ -73,12 +63,11 @@ pub const Font = struct {
     }
 
     /// The text as an image (null if no character has a glyph).
-    pub fn render(f: *const Font, text: []const u8) ?gfx.Image {
+    pub fn render(f: *const Font, gpa: std.mem.Allocator, text: []const u8) gfx.Image.Error!?gfx.Image {
         const w = f.width(text);
         const h = f.height(text);
         if (w == 0 or h == 0) return null;
-        const img = gfx.Image.create(w, h) orelse return null;
-        img.fill(null, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+        const img = try gfx.Image.create(gpa, w, h);
         var cx: i32 = 0;
         for (text) |ch| if (f.glyph(ch)) |g| {
             img.copy(g, cx, 0);
@@ -91,14 +80,10 @@ pub const Font = struct {
 pub const Fonts = struct {
     fonts: [@typeInfo(Kind).@"enum".fields.len]Font,
 
-    pub fn load(assets: []const u8) Fonts {
+    pub fn load(a: *Assets) Assets.Error!Fonts {
         var f: Fonts = undefined;
-        for (&f.fonts, 0..) |*font, i| font.* = .load(assets, @enumFromInt(i));
+        for (&f.fonts, 0..) |*font, i| font.* = try .load(a, @enumFromInt(i));
         return f;
-    }
-
-    pub fn deinit(f: *Fonts) void {
-        for (&f.fonts) |*font| font.deinit();
     }
 
     pub fn get(f: *const Fonts, kind: Kind) *const Font {
@@ -107,12 +92,14 @@ pub const Fonts = struct {
 };
 
 test "render text" {
-    var fonts = Fonts.load("bin/assets");
-    defer fonts.deinit();
+    const gpa = std.testing.allocator;
+    const a = try Assets.init(gpa, "bin/assets");
+    defer a.deinit();
+    const fonts = try Fonts.load(a);
     const f = fonts.get(.green_building);
     try std.testing.expect(f.width("1:23") > 0);
-    const img = f.render("1:23").?;
-    defer img.deinit();
+    const img = (try f.render(gpa, "1:23")).?;
+    defer img.deinit(gpa);
     try std.testing.expectEqual(f.width("1:23"), img.width());
-    try std.testing.expect(f.render("") == null);
+    try std.testing.expect(try f.render(gpa, "") == null);
 }

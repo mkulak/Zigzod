@@ -16,6 +16,7 @@ const Object = game.object.Object;
 const World = game.world.World;
 const Unit = buildlist.Unit;
 const Image = gfx.Image;
+const Assets = @import("assets.zig").Assets;
 const Canvas = gfx.Canvas;
 const Rect = gfx.Rect;
 
@@ -37,67 +38,50 @@ pub const ButtonKind = enum {
 const State = enum { place, select, building, paused };
 
 pub const Images = struct {
-    buttons: [@typeInfo(ButtonKind).@"enum".fields.len][2]?Image = @splat(@splat(null)),
-    base: ?Image = null,
-    base_expanded: ?Image = null,
-    fort_label: ?Image = null,
-    robot_label: ?Image = null,
-    vehicle_label: ?Image = null,
+    buttons: [@typeInfo(ButtonKind).@"enum".fields.len][2]Image,
+    base: Image,
+    base_expanded: Image,
+    fort_label: Image,
+    robot_label: Image,
+    vehicle_label: Image,
     /// [state][blink]
-    state_label: [4][2]?Image = @splat(@splat(null)),
-    p_bar: ?Image = null,
-    p_bar_yellow: ?Image = null,
-    fus_top_left: ?Image = null,
-    fus_top_right: ?Image = null,
-    fus_bottom_left: ?Image = null,
-    fus_bottom_right: ?Image = null,
-    fus_top: ?Image = null,
-    fus_bottom: ?Image = null,
-    fus_left: ?Image = null,
-    fus_right: ?Image = null,
+    state_label: [4][2]Image,
+    p_bar: Image,
+    p_bar_yellow: Image,
+    fus_top_left: Image,
+    fus_top_right: Image,
+    fus_bottom_left: Image,
+    fus_bottom_right: Image,
+    fus_top: Image,
+    fus_bottom: Image,
+    fus_left: Image,
+    fus_right: Image,
 
-    pub fn load(assets: []const u8) Images {
-        var m: Images = .{};
+    pub fn load(a: *Assets) Assets.Error!Images {
+        var m: Images = undefined;
         for (&m.buttons, 0..) |*b, i| {
             const name = @tagName(@as(ButtonKind, @enumFromInt(i)));
-            b[0] = one(assets, "{s}_button.png", .{name});
-            b[1] = one(assets, "{s}_button_pressed.png", .{name});
+            b[0] = try a.image(folder ++ "{s}_button.png", .{name});
+            b[1] = try a.image(folder ++ "{s}_button_pressed.png", .{name});
         }
-        m.base = one(assets, "base_image.png", .{});
-        m.base_expanded = one(assets, "base_image_expanded.png", .{});
-        m.fort_label = one(assets, "fort_factory_label.png", .{});
-        m.robot_label = one(assets, "robot_factory_label.png", .{});
-        m.vehicle_label = one(assets, "vehicle_factory_label.png", .{});
+        m.base = try a.image(folder ++ "base_image.png", .{});
+        m.base_expanded = try a.image(folder ++ "base_image_expanded.png", .{});
+        m.fort_label = try a.image(folder ++ "fort_factory_label.png", .{});
+        m.robot_label = try a.image(folder ++ "robot_factory_label.png", .{});
+        m.vehicle_label = try a.image(folder ++ "vehicle_factory_label.png", .{});
         for (&m.state_label, [_][]const u8{ "place", "select", "building", "paused" }) |*l, name| {
-            l[0] = one(assets, "{s}_label.png", .{name});
-            l[1] = one(assets, "{s}less_label.png", .{name});
+            l[0] = try a.image(folder ++ "{s}_label.png", .{name});
+            l[1] = try a.image(folder ++ "{s}less_label.png", .{name});
         }
-        m.p_bar = one(assets, "percentage_bar.png", .{});
-        m.p_bar_yellow = one(assets, "percentage_bar_yellow.png", .{});
+        m.p_bar = try a.image(folder ++ "percentage_bar.png", .{});
+        m.p_bar_yellow = try a.image(folder ++ "percentage_bar_yellow.png", .{});
         inline for (.{ "top_left", "top_right", "bottom_left", "bottom_right", "top", "bottom", "left", "right" }) |part| {
-            @field(m, "fus_" ++ part) = one(assets, "fus_" ++ part ++ ".png", .{});
+            @field(m, "fus_" ++ part) = try a.image(folder ++ "fus_" ++ part ++ ".png", .{});
         }
         return m;
     }
 
-    fn one(assets: []const u8, comptime fmt: []const u8, args: anytype) ?Image {
-        var buf: [512]u8 = undefined;
-        return Image.load(std.fmt.bufPrintZ(&buf, "{s}/" ++ folder ++ fmt, .{assets} ++ args) catch return null);
-    }
-
-    pub fn deinit(m: *Images) void {
-        inline for (@typeInfo(Images).@"struct".fields) |f| free(&@field(m, f.name));
-    }
-
-    fn free(x: anytype) void {
-        switch (@typeInfo(@TypeOf(x.*))) {
-            .array => for (x) |*e| free(e),
-            .optional => if (x.*) |img| img.deinit(),
-            else => comptime unreachable,
-        }
-    }
-
-    fn button(m: *const Images, kind: ButtonKind, pressed: bool) ?Image {
+    fn button(m: *const Images, kind: ButtonKind, pressed: bool) Image {
         return m.buttons[@intFromEnum(kind)][@intFromBool(pressed)];
     }
 };
@@ -329,8 +313,7 @@ pub const Production = struct {
     // Mouse
     // -----------------------------------------------------------------------
 
-    fn hit(img: ?Image, x0: i32, y0: i32, x: i32, y: i32) bool {
-        const i = img orelse return false;
+    fn hit(i: Image, x0: i32, y0: i32, x: i32, y: i32) bool {
         return x >= x0 and y >= y0 and x <= x0 + i.width() and y <= y0 + i.height();
     }
 
@@ -477,29 +460,29 @@ pub const Production = struct {
         const x = p.x;
         const y = p.y;
 
-        if (if (p.expanded) images.base_expanded else images.base) |img| cv.draw(img, x, y);
+        cv.draw(if (p.expanded) images.base_expanded else images.base, x, y);
         const label = switch (b.type) {
             .robot_factory => images.robot_label,
             .vehicle_factory => images.vehicle_label,
             else => images.fort_label,
         };
-        if (label) |img| cv.draw(img, x + 9, y + 6);
+        cv.draw(label, x + 9, y + 6);
         const blink: usize = @intFromFloat(@mod(@floor(time / 0.3), 2));
-        if (images.state_label[@intFromEnum(st)][blink]) |img| cv.draw(img, x + 64, y + 19);
+        cv.draw(images.state_label[@intFromEnum(st)][blink], x + 64, y + 19);
 
         for (0..@typeInfo(ButtonKind).@"enum".fields.len) |i| {
             const kind: ButtonKind = @enumFromInt(i);
             const pos = p.buttonPos(kind) orelse continue;
             if (!p.buttonActive(kind, st)) continue;
             const down = if (p.pressed) |pr| std.meta.eql(pr, Pressed{ .button = kind }) else false;
-            if (images.button(kind, down)) |img| cv.draw(img, x + pos[0], y + pos[1]);
+            cv.draw(images.button(kind, down), x + pos[0], y + pos[1]);
         }
 
         // The queue.
         if (p.expanded) for (b.queue.items, 0..) |u, i| {
             const qy = y + 22 + @as(i32, @intCast(i)) * 14;
             const down = if (p.pressed) |pr| std.meta.eql(pr, Pressed{ .queue_item = i }) else false;
-            if (images.button(.object_name, down)) |img| cv.draw(img, x + 177, qy);
+            cv.draw(images.button(.object_name, down), x + 177, qy);
             const name = unitName(u);
             small.draw(cv, name, x + 177 + 23 - (small.width(name) >> 1), qy + 2);
         };
@@ -522,16 +505,15 @@ pub const Production = struct {
                     .{ .down, Selector.down, .{ .selector_down = @intCast(i) } },
                 }) |bt| {
                     const down = if (p.pressed) |pr| std.meta.eql(pr, bt[2]) else false;
-                    if (images.button(bt[0], down)) |img| cv.draw(img, sx + bt[1][0], sy + bt[1][1]);
+                    cv.draw(images.button(bt[0], down), sx + bt[1][0], sy + bt[1][1]);
                 }
             } else if (!s.only_selector) {
                 // Progress: the yellow part shrinks as the unit gets done.
-                if (images.p_bar) |bar| cv.draw(bar, sx + 50, sy + 2);
-                if (images.p_bar_yellow) |bar| {
-                    const done = std.math.clamp((time - b.init_time) / @max(b.final_time - b.init_time, 0.001), 0, 1);
-                    const h: i32 = @intFromFloat((1 - done) * @as(f64, @floatFromInt(bar.height())));
-                    if (h > 0) cv.drawPart(bar, .{ .x = 0, .y = 0, .w = bar.width(), .h = h }, sx + 50, sy + 2);
-                }
+                cv.draw(images.p_bar, sx + 50, sy + 2);
+                const bar = images.p_bar_yellow;
+                const done = std.math.clamp((time - b.init_time) / @max(b.final_time - b.init_time, 0.001), 0, 1);
+                const h: i32 = @intFromFloat((1 - done) * @as(f64, @floatFromInt(bar.height())));
+                if (h > 0) cv.drawPart(bar, .{ .x = 0, .y = 0, .w = bar.width(), .h = h }, sx + 50, sy + 2);
             }
             if (p.selected(@intCast(i), st, b)) |u| {
                 p.drawUnit(cv, world, all, fx, rng, u, o.owner, sx + 24, sy + 21, i == 0);
@@ -575,23 +557,26 @@ pub const Production = struct {
         const side = Picker.side;
         // Frame: corners, stretched edges, gray inside.
         cv.fill(.{ .x = r.x + side, .y = r.y + Picker.top, .w = r.w - 2 * side, .h = r.h - Picker.top - side }, .{ .r = 57, .g = 57, .b = 57 });
-        if (images.fus_top_left) |tl| {
-            if (images.fus_top) |t| cv.tile(t, .{ .x = r.x + tl.width(), .y = r.y, .w = r.w - tl.width() - side, .h = t.height() });
-            cv.draw(tl, r.x, r.y);
-        }
-        if (images.fus_bottom) |t| cv.tile(t, .{ .x = r.x + side, .y = r.y + r.h - side, .w = r.w - 2 * side, .h = t.height() });
-        if (images.fus_left) |t| cv.tile(t, .{ .x = r.x, .y = r.y + Picker.top, .w = t.width(), .h = r.h - Picker.top - side });
-        if (images.fus_right) |t| cv.tile(t, .{ .x = r.x + r.w - side, .y = r.y + Picker.top, .w = t.width(), .h = r.h - Picker.top - side });
-        if (images.fus_top_right) |img| cv.draw(img, r.x + r.w - side, r.y);
-        if (images.fus_bottom_left) |img| cv.draw(img, r.x, r.y + r.h - side);
-        if (images.fus_bottom_right) |img| cv.draw(img, r.x + r.w - side, r.y + r.h - side);
+        const tl = images.fus_top_left;
+        const top = images.fus_top;
+        cv.tile(top, .{ .x = r.x + tl.width(), .y = r.y, .w = r.w - tl.width() - side, .h = top.height() });
+        cv.draw(tl, r.x, r.y);
+        const bottom = images.fus_bottom;
+        cv.tile(bottom, .{ .x = r.x + side, .y = r.y + r.h - side, .w = r.w - 2 * side, .h = bottom.height() });
+        const left = images.fus_left;
+        cv.tile(left, .{ .x = r.x, .y = r.y + Picker.top, .w = left.width(), .h = r.h - Picker.top - side });
+        const right = images.fus_right;
+        cv.tile(right, .{ .x = r.x + r.w - side, .y = r.y + Picker.top, .w = right.width(), .h = r.h - Picker.top - side });
+        cv.draw(images.fus_top_right, r.x + r.w - side, r.y);
+        cv.draw(images.fus_bottom_left, r.x, r.y + r.h - side);
+        cv.draw(images.fus_bottom_right, r.x + r.w - side, r.y + r.h - side);
 
         const small = fonts.get(.small_white);
         for (pk.cellsSlice(), 0..) |cell, i| {
             const down = if (p.pressed) |pr| std.meta.eql(pr, Pressed{ .pick = i }) else false;
             const cx = r.x + cell.x;
             const cy = r.y + cell.y;
-            if (images.button(.object, down)) |img| cv.draw(img, cx, cy);
+            cv.draw(images.button(.object, down), cx, cy);
             p.drawUnit(cv, world, all, fx, rng, cell.unit, team, cx + 22, cy + 19, false);
             const name = unitName(cell.unit);
             small.draw(cv, name, cx + 23 - (small.width(name) >> 1), cy + 40);
@@ -622,17 +607,17 @@ test "production window" {
     b.state = .select;
     b.cannons.clearRetainingCapacity();
 
-    var images = Images.load("bin/assets");
-    defer images.deinit();
+    const a = try Assets.init(gpa, "bin/assets");
+    defer a.deinit();
+    const images = try Images.load(a);
+    try std.testing.expectEqual(0, a.missing);
     var p = Production.open(gpa, f, &world.map.?).?;
     defer p.deinit();
 
     // OK starts building what the selector shows.
-    const ok_img = images.button(.ok, false).?;
     p.press(&world, &images, p.x + 67 + 2, p.y + 60 + 2);
     const act = p.release(&world, &images, p.x + 67 + 2, p.y + 60 + 2);
     try std.testing.expectEqual(buildlist.forBuilding(b.type, b.level)[0], act.start);
-    _ = ok_img;
 
     // The portrait opens the full list; picking the second unit starts it.
     p.press(&world, &images, p.x + 3 + 10, p.y + 19 + 10);
@@ -656,48 +641,39 @@ test "production window" {
 
 /// Art of the factory list (from assets/other/factory_gui).
 pub const ListImages = struct {
-    top: ?Image = null,
-    right: ?Image = null,
-    entry: ?Image = null,
-    bar_green: ?Image = null,
-    bar_grey: ?Image = null,
-    bar_white_i: ?Image = null,
-    up: [2]?Image = @splat(null),
-    down: [2]?Image = @splat(null),
-    scroll_top: ?Image = null,
-    scroll_center: ?Image = null,
-    scroll_bottom: ?Image = null,
-    inner_top: ?Image = null,
-    inner_center: ?Image = null,
-    inner_bottom: ?Image = null,
+    top: Image,
+    right: Image,
+    entry: Image,
+    bar_green: Image,
+    bar_grey: Image,
+    bar_white_i: Image,
+    up: [2]Image,
+    down: [2]Image,
+    scroll_top: Image,
+    scroll_center: Image,
+    scroll_bottom: Image,
+    inner_top: Image,
+    inner_center: Image,
+    inner_bottom: Image,
 
-    pub fn load(assets: []const u8) ListImages {
-        const one = struct {
-            fn f(a: []const u8, name: []const u8) ?Image {
-                var buf: [512]u8 = undefined;
-                return Image.load(std.fmt.bufPrintZ(&buf, "{s}/other/factory_gui/{s}.png", .{ a, name }) catch return null);
-            }
-        }.f;
+    pub fn load(a: *Assets) Assets.Error!ListImages {
+        const dir = "other/factory_gui/";
         return .{
-            .top = one(assets, "main_top"),
-            .right = one(assets, "main_right"),
-            .entry = one(assets, "main_entry"),
-            .bar_green = one(assets, "entry_bar_green"),
-            .bar_grey = one(assets, "entry_bar_grey"),
-            .bar_white_i = one(assets, "entry_bar_white_i"),
-            .up = .{ one(assets, "fup_button"), one(assets, "fup_button_pressed") },
-            .down = .{ one(assets, "fdown_button"), one(assets, "fdown_button_pressed") },
-            .scroll_top = one(assets, "scrollbar_top"),
-            .scroll_center = one(assets, "scrollbar_center"),
-            .scroll_bottom = one(assets, "scrollbar_bottom"),
-            .inner_top = one(assets, "scrollbar_inner_top"),
-            .inner_center = one(assets, "scrollbar_inner_center"),
-            .inner_bottom = one(assets, "scrollbar_inner_bottom"),
+            .top = try a.image(dir ++ "main_top.png", .{}),
+            .right = try a.image(dir ++ "main_right.png", .{}),
+            .entry = try a.image(dir ++ "main_entry.png", .{}),
+            .bar_green = try a.image(dir ++ "entry_bar_green.png", .{}),
+            .bar_grey = try a.image(dir ++ "entry_bar_grey.png", .{}),
+            .bar_white_i = try a.image(dir ++ "entry_bar_white_i.png", .{}),
+            .up = .{ try a.image(dir ++ "fup_button.png", .{}), try a.image(dir ++ "fup_button_pressed.png", .{}) },
+            .down = .{ try a.image(dir ++ "fdown_button.png", .{}), try a.image(dir ++ "fdown_button_pressed.png", .{}) },
+            .scroll_top = try a.image(dir ++ "scrollbar_top.png", .{}),
+            .scroll_center = try a.image(dir ++ "scrollbar_center.png", .{}),
+            .scroll_bottom = try a.image(dir ++ "scrollbar_bottom.png", .{}),
+            .inner_top = try a.image(dir ++ "scrollbar_inner_top.png", .{}),
+            .inner_center = try a.image(dir ++ "scrollbar_inner_center.png", .{}),
+            .inner_bottom = try a.image(dir ++ "scrollbar_inner_bottom.png", .{}),
         };
-    }
-
-    pub fn deinit(m: *ListImages) void {
-        inline for (@typeInfo(ListImages).@"struct".fields) |f| Images.free(&@field(m, f.name));
     }
 };
 
@@ -731,8 +707,8 @@ pub const FactoryList = struct {
 
     /// Bottom left of the map area, as tall as its entries (or the area).
     fn layout(l: *FactoryList, images: *const ListImages, area: Rect, count: usize) ?Layout {
-        const top = images.top orelse return null;
-        const entry = images.entry orelse return null;
+        const top = images.top;
+        const entry = images.entry;
         var visible: usize = 0;
         if (count > 0) {
             const room = area.h - top.height() - entry.height();
@@ -755,11 +731,11 @@ pub const FactoryList = struct {
         const lx = x - lay.x;
         const ly = y - lay.y;
         if (list.len > 0) {
-            if (inside(images.up[0], 123, images.top.?.height() + 2, lx, ly)) l.pressed = .up;
+            if (inside(images.up[0], 123, images.top.height() + 2, lx, ly)) l.pressed = .up;
             if (inside(images.down[0], 123, lay.h - 11, lx, ly)) l.pressed = .down;
         }
-        const entry_h = images.entry.?.height();
-        const top_h = images.top.?.height();
+        const entry_h = images.entry.height();
+        const top_h = images.top.height();
         if (lx <= 120 and ly >= top_h) {
             const i = l.first + @as(usize, @intCast(@divTrunc(ly - top_h, entry_h)));
             if (i < list.len and i < l.first + lay.visible) jump.* = list[i].ref_id;
@@ -777,8 +753,7 @@ pub const FactoryList = struct {
         if (down) l.first += 1 else l.first -|= 1;
     }
 
-    fn inside(img: ?Image, x0: i32, y0: i32, x: i32, y: i32) bool {
-        const i = img orelse return false;
+    fn inside(i: Image, x0: i32, y0: i32, x: i32, y: i32) bool {
         return x >= x0 and y >= y0 and x <= x0 + i.width() and y <= y0 + i.height();
     }
 
@@ -787,8 +762,8 @@ pub const FactoryList = struct {
         var buf: [max_entries]*Object = undefined;
         const list = entries(world, team, &buf);
         const lay = l.layout(images, area, list.len) orelse return;
-        const top = images.top.?;
-        const entry = images.entry.?;
+        const top = images.top;
+        const entry = images.entry;
         cv.draw(top, lay.x, lay.y);
         var ty = lay.y + top.height();
         for (list[l.first..][0..lay.visible]) |o| {
@@ -796,13 +771,14 @@ pub const FactoryList = struct {
             drawEntry(cv, world, o, images, fonts, lay.x + 12, ty + 7);
             ty += entry.height();
         }
-        if (images.right) |right| {
+        {
+            const right = images.right;
             var ry = lay.y + top.height();
             while (ry < area.y + area.h) : (ry += right.height()) cv.draw(right, lay.x + top.width() - right.width(), ry);
         }
         if (list.len == 0) return;
-        if (images.up[@intFromBool(l.pressed == .up)]) |img| cv.draw(img, lay.x + 123, lay.y + top.height() + 2);
-        if (images.down[@intFromBool(l.pressed == .down)]) |img| cv.draw(img, lay.x + 123, lay.y + lay.h - 11);
+        cv.draw(images.up[@intFromBool(l.pressed == .up)], lay.x + 123, lay.y + top.height() + 2);
+        cv.draw(images.down[@intFromBool(l.pressed == .down)], lay.x + 123, lay.y + lay.h - 11);
         // The scroll bar: its thumb shows the visible part.
         const bar_top = top.height() + 14;
         const bar_h = lay.h - 14 - bar_top;
@@ -817,10 +793,7 @@ pub const FactoryList = struct {
     }
 
     /// Top, repeated middle and bottom pieces over a height.
-    fn strip(cv: Canvas, top: ?Image, center: ?Image, bottom: ?Image, x: i32, y: i32, h: i32) void {
-        const t = top orelse return;
-        const c_ = center orelse return;
-        const b = bottom orelse return;
+    fn strip(cv: Canvas, t: Image, c_: Image, b: Image, x: i32, y: i32, h: i32) void {
         cv.draw(t, x, y);
         var cy = y + t.height();
         const end = y + h - b.height();
@@ -871,15 +844,15 @@ pub const FactoryList = struct {
         var y = y0;
         for (0..3) |i| {
             if (fill[i]) |f| {
-                const green = images.bar_green orelse return;
+                const green = images.bar_green;
                 if (f > 0.99) {
                     cv.draw(green, x, y);
                 } else {
                     const gw: i32 = @intFromFloat(@as(f64, @floatFromInt(green.width())) * f);
                     if (gw > 0) cv.drawPart(green, .{ .x = 0, .y = 0, .w = gw, .h = green.height() }, x, y);
-                    if (images.bar_white_i) |w| cv.draw(w, @max(x + gw - 1, x), y);
+                    cv.draw(images.bar_white_i, @max(x + gw - 1, x), y);
                 }
-            } else if (images.bar_grey) |grey| cv.draw(grey, x, y);
+            } else cv.draw(images.bar_grey, x, y);
             small.draw(cv, texts[i][0], x + 2, y + 3);
             small.draw(cv, texts[i][1], x + 101 - small.width(texts[i][1]), y + 3);
             y += 17;

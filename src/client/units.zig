@@ -487,9 +487,8 @@ pub fn pickupGrenades(v: *UnitVisual) void {
 // Drawing
 // ---------------------------------------------------------------------------
 
-fn put(cv: Canvas, img: ?Image, x: i32, y: i32, hit: bool) void {
-    const i = img orelse return;
-    if (hit) cv.drawHit(i, x, y) else cv.draw(i, x, y);
+fn put(cv: Canvas, img: Image, x: i32, y: i32, hit: bool) void {
+    if (hit) cv.drawHit(img, x, y) else cv.draw(img, x, y);
 }
 
 pub fn draw(cv: Canvas, s: *const Sprites, o: *const Object, v: *UnitVisual, world: *const World, submerge: i32) void {
@@ -519,7 +518,7 @@ pub fn draw(cv: Canvas, s: *const Sprites, o: *const Object, v: *UnitVisual, wor
         .robot => |rb| {
             const r = &s.robot;
             const d = v.direction;
-            const img: ?Image = if (o.owner == .none) r.null_img else switch (v.mode) {
+            const img: Image = if (o.owner == .none) r.null_img else switch (v.mode) {
                 .walking => r.walk[owner][d][v.move_i % 4],
                 .standing => r.stand[owner][d],
                 .beer => r.beer[owner][@min(v.action_i, 9)],
@@ -533,7 +532,7 @@ pub fn draw(cv: Canvas, s: *const Sprites, o: *const Object, v: *UnitVisual, wor
                 else
                     r.fire[@intFromEnum(rb)][owner][d][@min(v.action_i, fireFrames(rb) - 1)],
             };
-            const i = img orelse return;
+            const i = img;
             // Robots sink into water.
             const part: gfx.Rect = .{ .x = 0, .y = 0, .w = i.width(), .h = @max(i.height() - submerge, 0) };
             if (v.hit) cv.drawHit(i, o.x, o.y + submerge) else cv.drawPart(i, part, o.x, o.y + submerge);

@@ -11,6 +11,7 @@ const frames = @import("portrait_frames.zig");
 const Object = @import("../game/object.zig").Object;
 
 const Image = gfx.Image;
+const Assets = @import("assets.zig").Assets;
 const Canvas = gfx.Canvas;
 
 pub const width = 86;
@@ -106,22 +107,23 @@ pub const Anim = enum(u8) {
 
 /// One robot's face in one team's colors.
 const Face = struct {
-    shoulders: ?Image = null,
-    head: [3]?Image = @splat(null),
-    mouth: [mouth_count]?Image = @splat(null),
-    eyes: [eye_count]?Image = @splat(null),
-    hand: [hand_count]?Image = @splat(null),
+    shoulders: Image,
+    head: [3]Image,
+    mouth: [mouth_count]Image,
+    eyes: [eye_count]Image,
+    hand: [hand_count]Image,
 
-    fn images(f: *Face) []?Image {
-        const all: [*]?Image = @ptrCast(f);
-        return all[0 .. @sizeOf(Face) / @sizeOf(?Image)];
+    /// The pictures, in the order of the art's numbering.
+    fn images(f: *Face) []Image {
+        const all: [*]Image = @ptrCast(f);
+        return all[0 .. @sizeOf(Face) / @sizeOf(Image)];
     }
 };
 
 pub const Faces = struct {
-    faces: [k.Robot.count][k.Team.count]Face = @splat(@splat(.{})),
-    backdrop: [k.Planet.count]?Image = @splat(null),
-    backdrop_vehicle: ?Image = null,
+    faces: [k.Robot.count][k.Team.count]Face,
+    backdrop: [k.Planet.count]Image,
+    backdrop_vehicle: Image,
 
     /// The old game's numbering of the face art.
     fn artId(r: k.Robot) u8 {
@@ -134,38 +136,30 @@ pub const Faces = struct {
         };
     }
 
-    pub fn load(assets: []const u8, palettes: *const gfx.TeamPalettes) Faces {
-        var m: Faces = .{};
-        var buf: [512]u8 = undefined;
-        m.backdrop_vehicle = Image.load(std.fmt.bufPrintZ(&buf, "{s}/other/hud/backdrop_vehicle.bmp", .{assets}) catch unreachable);
-        for (&m.backdrop, 0..) |*b, p| {
-            b.* = Image.load(std.fmt.bufPrintZ(&buf, "{s}/other/hud/backdrop_{s}.bmp", .{ assets, @tagName(@as(k.Planet, @enumFromInt(p))) }) catch continue);
-        }
+    pub fn load(a: *Assets) Assets.Error!Faces {
+        var m: Faces = undefined;
+        m.backdrop_vehicle = try a.image("other/hud/backdrop_vehicle.bmp", .{});
+        for (&m.backdrop, 0..) |*b, p| b.* = try a.image("other/hud/backdrop_{s}.bmp", .{@tagName(@as(k.Planet, @enumFromInt(p)))});
         for (&m.faces, 0..) |*per_team, r| {
             const robot: k.Robot = @enumFromInt(r);
             // Drawn for red, recolored for the teams without their own art.
             const red = &per_team[@intFromEnum(k.Team.red)];
             for (red.images(), 0..) |*img, i| {
-                img.* = Image.load(std.fmt.bufPrintZ(&buf, "{s}/other/hud/portraits/{s}_red/SHEADBI{d}_{d:0>4}.png", .{ assets, @tagName(robot), artId(robot), i }) catch continue);
+                img.* = try a.image("other/hud/portraits/{s}_red/SHEADBI{d}_{d:0>4}.png", .{ @tagName(robot), artId(robot), i });
             }
             for (per_team, 0..) |*face, t| {
                 const team: k.Team = @enumFromInt(t);
-                if (team == .none or team == .red) continue;
+                if (team == .red) continue;
                 for (face.images(), red.images(), 0..) |*img, base, i| {
-                    img.* = Image.loadQuiet(std.fmt.bufPrintZ(&buf, "{s}/other/hud/portraits/{s}_{s}/SHEADBI{d}_{d:0>4}.png", .{ assets, @tagName(robot), team.name(), artId(robot), i }) catch continue);
-                    if (img.* == null) if (base) |b| {
-                        img.* = palettes.make(team, b);
-                    };
+                    img.* = if (team == .none)
+                        a.nothing
+                    else
+                        try a.find("other/hud/portraits/{s}_{s}/SHEADBI{d}_{d:0>4}.png", .{ @tagName(robot), team.name(), artId(robot), i }) orelse
+                            try a.recolor(team, base);
                 }
             }
         }
         return m;
-    }
-
-    pub fn deinit(m: *Faces) void {
-        for (&m.faces) |*per_team| for (per_team) |*face| for (face.images()) |img| if (img) |i| i.deinit();
-        for (m.backdrop) |b| if (b) |i| i.deinit();
-        if (m.backdrop_vehicle) |i| i.deinit();
     }
 };
 
@@ -251,22 +245,22 @@ pub const Portrait = struct {
         const box: gfx.Rect = .{ .x = x, .y = y, .w = width, .h = height };
         const robot = p.robot orelse return cv.fill(box, .{ .r = 0, .g = 0, .b = 0 });
         const in_box: Canvas = .{ .target = cv.target, .clip = box.intersect(cv.clip) orelse return, .dx = cv.dx, .dy = cv.dy };
-        if (if (p.in_vehicle) faces.backdrop_vehicle else faces.backdrop[@intFromEnum(planet)]) |b| in_box.draw(b, x, y);
+        in_box.draw(if (p.in_vehicle) faces.backdrop_vehicle else faces.backdrop[@intFromEnum(planet)], x, y);
         const face = &faces.faces[@intFromEnum(robot)][@intFromEnum(p.team)];
         const f = p.frame(time);
         const head_x = 4;
-        if (face.head[@intFromEnum(f.look)]) |img| in_box.draw(img, x + head_x, y + f.head_y);
+        in_box.draw(face.head[@intFromEnum(f.look)], x + head_x, y + f.head_y);
         if (f.look == .straight) {
             const face_y: i32 = switch (robot) {
                 .grunt => 0,
                 .sniper => 4,
                 else => 2,
             };
-            if (face.eyes[@min(f.eyes, eye_count - 1)]) |img| in_box.draw(img, x + 14 + head_x, y + 8 + f.head_y + face_y);
-            if (face.mouth[@min(f.mouth, mouth_count - 1)]) |img| in_box.draw(img, x + 22 + head_x, y + 24 + f.head_y + face_y);
+            in_box.draw(face.eyes[@min(f.eyes, eye_count - 1)], x + 14 + head_x, y + 8 + f.head_y + face_y);
+            in_box.draw(face.mouth[@min(f.mouth, mouth_count - 1)], x + 22 + head_x, y + 24 + f.head_y + face_y);
         }
-        if (face.shoulders) |img| in_box.draw(img, x, y + height - img.height());
-        if (f.hand) |h| if (face.hand[@min(h, hand_count - 1)]) |img| in_box.draw(img, x + f.hand_x, y + f.hand_y);
+        in_box.draw(face.shoulders, x, y + height - face.shoulders.height());
+        if (f.hand) |h| in_box.draw(face.hand[@min(h, hand_count - 1)], x + f.hand_x, y + f.hand_y);
     }
 };
 
@@ -308,9 +302,9 @@ test "portrait animations run and end" {
     p.update(10 + Anim.yes_sir.duration() + 0.01, prng.random());
     try std.testing.expect(!p.busy());
 
-    const palettes = gfx.TeamPalettes.load("bin/assets");
-    var faces = Faces.load("bin/assets", &palettes);
-    defer faces.deinit();
-    try std.testing.expect(faces.faces[@intFromEnum(k.Robot.laser)][@intFromEnum(k.Team.green)].hand[8] != null);
-    try std.testing.expect(faces.faces[@intFromEnum(k.Robot.tough)][@intFromEnum(k.Team.red)].shoulders != null);
+    const a = try Assets.init(std.testing.allocator, "bin/assets");
+    defer a.deinit();
+    const faces = try Faces.load(a);
+    try std.testing.expectEqual(0, a.missing);
+    try std.testing.expect(faces.faces[@intFromEnum(k.Robot.laser)][@intFromEnum(k.Team.green)].hand[8].w > 1);
 }

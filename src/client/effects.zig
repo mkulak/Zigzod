@@ -34,7 +34,7 @@ pub const Transforms = struct {
     frame: u32 = 0,
 
     const Key = struct { src: [*]u32, angle: u16, size: u16 };
-    const Entry = struct { img: ?Image, used: u32 };
+    const Entry = struct { img: Image, used: u32 };
     const size_steps = 20;
     /// Frames between sweeps, and how long an unused copy is kept.
     const sweep_interval = 128;
@@ -42,26 +42,30 @@ pub const Transforms = struct {
 
     pub fn deinit(t: *Transforms) void {
         var it = t.map.valueIterator();
-        while (it.next()) |e| if (e.img) |img| img.deinit();
+        while (it.next()) |e| e.img.deinit(t.gpa);
         t.map.deinit(t.gpa);
     }
 
     /// `img` turned by `angle` degrees and scaled by `size`; null if that
-    /// is too small to see.
+    /// is too small to see (or there is no memory for it: effects are
+    /// only decoration).
     pub fn get(t: *Transforms, img: Image, angle: f64, size: f64) ?Image {
         const a: u16 = @intCast(@mod(@as(i32, @intFromFloat(@round(angle))), 360));
         const s_f = @round(size * size_steps);
         if (!(s_f >= 1)) return null;
         const s: u16 = @intFromFloat(@min(s_f, 10 * size_steps));
         if (a == 0 and s == size_steps) return img;
-        const gop = t.map.getOrPut(t.gpa, .{ .src = img.pixels, .angle = a, .size = s }) catch return null;
-        if (!gop.found_existing) gop.value_ptr.img = make(img, a, s);
-        gop.value_ptr.used = t.frame;
-        return gop.value_ptr.img;
-    }
-
-    fn make(img: Image, angle: u16, size: u16) ?Image {
-        return img.rotozoom(@floatFromInt(angle), @as(f64, @floatFromInt(size)) / size_steps);
+        const key: Key = .{ .src = img.pixels, .angle = a, .size = s };
+        if (t.map.getPtr(key)) |e| {
+            e.used = t.frame;
+            return e.img;
+        }
+        const made = img.rotozoom(t.gpa, @floatFromInt(a), @as(f64, @floatFromInt(s)) / size_steps) catch return null;
+        t.map.put(t.gpa, key, .{ .img = made, .used = t.frame }) catch {
+            made.deinit(t.gpa);
+            return null;
+        };
+        return made;
     }
 
     /// Call once per drawn frame.
@@ -77,7 +81,7 @@ pub const Transforms = struct {
         }
         for (old.items) |key| {
             const e = t.map.fetchRemove(key).?;
-            if (e.value.img) |img| img.deinit();
+            e.value.img.deinit(t.gpa);
         }
     }
 };
@@ -216,7 +220,7 @@ pub const Fire = struct {
             .small_fire_smoke => .{ &s.small_fire_smoke, 8, 16 },
             .fire => .{ &s.fire, 4, 8 },
         };
-        if (imgs[f.frames.i]) |img| cv.draw(img, f.base_x - ox, f.base_y - oy);
+        cv.draw(imgs[f.frames.i], f.base_x - ox, f.base_y - oy);
     }
 
     /// Fires further down the screen are drawn later.
@@ -251,7 +255,7 @@ pub const TurretPiece = enum {
         };
     }
 
-    fn image(p: TurretPiece, s: *const Fx, team: k.Team, i: u8) ?Image {
+    fn image(p: TurretPiece, s: *const Fx, team: k.Team, i: u8) Image {
         return switch (p) {
             .light => s.light_turret[i],
             .medium => s.medium_turret[i],
@@ -322,21 +326,21 @@ const Effect = union(enum) {
     particle: struct { arc: Arc, frames: Frames },
     spark: struct { arc: Arc, frames: Frames },
     robot_flip: struct { team: k.Team, arc: Arc, frames: Frames },
-    rock_particle: struct { arc: Arc, frames: Frames, imgs: []const ?Image },
+    rock_particle: struct { arc: Arc, frames: Frames, imgs: []const Image },
     /// Big rock or bridge pieces; `reversed` flies back in (a bridge
     /// being rebuilt).
-    rock_chunk: struct { arc: Arc, frames: Frames, imgs: *const [12]?Image, planet: k.Planet, spin: f64, reversed: bool },
+    rock_chunk: struct { arc: Arc, frames: Frames, imgs: *const [12]Image, planet: k.Planet, spin: f64, reversed: bool },
     turret: struct { piece: TurretPiece, team: k.Team, arc: Arc, frames: Frames, spin: f64 },
     map_object: struct { index: u8, arc: Arc, spin: f64, dest: Point },
     /// A destroyed unit burning for a while before blowing apart.
     wreck: Wreck,
-    track: struct { imgs: *const [3]?Image, pos: [2][2]i32, lay: [2]bool, start: f64, i: u8 },
+    track: struct { imgs: *const [3]Image, pos: [2][2]i32, lay: [2]bool, start: f64, i: u8 },
 };
 
 const Anim = struct {
-    imgs: []const ?Image,
+    imgs: []const Image,
     /// Shown instead of `imgs` for the first frames (tank sparks).
-    first: []const ?Image = &.{},
+    first: []const Image = &.{},
     x: i32,
     y: i32,
     frames: Frames,
@@ -352,7 +356,7 @@ const Anim = struct {
 };
 
 const Wreck = struct {
-    img: ?Image,
+    img: Image,
     x: i32,
     y: i32,
     until: f64,
@@ -461,7 +465,7 @@ pub const Effects = struct {
 
     fn beam(fx: *Effects, is_flame: bool, from_x: i32, from_y: i32, to_x: i32, to_y: i32) void {
         const img = if (is_flame) fx.s.flame_bullet[0] else fx.s.laser_bullet[0];
-        const first = img orelse return;
+        const first = img;
         const from: Point = .of(from_x - (first.width() >> 1), from_y - (first.height() >> 1));
         var line: Line = .init(.of(from_x, from_y), .of(to_x, to_y), 300, fx.time);
         const angle = line.imageAngle();
@@ -500,7 +504,7 @@ pub const Effects = struct {
             .light => {
                 // A muzzle flash; the shell is drawn from its corner.
                 fx.anim(.{ .imgs = fx.s.light_init_fire[@intCast(fx.rand(4))..][0..1], .x = from_x - 8, .y = from_y - 7, .frames = .init(fx.time, 0.02) });
-                if (fx.s.light_bullet) |img| offset = .of(-(img.width() >> 1), -(img.height() >> 1));
+                offset = .of(-(fx.s.light_bullet.width() >> 1), -(fx.s.light_bullet.height() >> 1));
             },
             .tough => {},
             .launcher => side = .{ .x = uy * 8, .y = ux * -8 },
@@ -543,7 +547,7 @@ pub const Effects = struct {
     fn pyroFire(fx: *Effects, x: i32, y: i32) void {
         const kind: usize = @intCast(fx.rand(5));
         const n: usize = if (kind < 3) 4 else 6;
-        const first = fx.s.pyro_fire[kind][0] orelse return;
+        const first = fx.s.pyro_fire[kind][0];
         fx.anim(.{ .imgs = fx.s.pyro_fire[kind][0..n], .x = x - (first.width() >> 1), .y = y - (first.height() >> 1), .frames = .init(fx.time, 0.06) });
     }
 
@@ -599,7 +603,7 @@ pub const Effects = struct {
 
     fn rockParticle(fx: *Effects, x0: i32, y0: i32, mid: bool, horz: u32, vert: u32) void {
         const p = @intFromEnum(fx.planet);
-        const imgs: []const ?Image = if (!mid) &fx.s.rock_small[p] else &fx.s.rock_mid[@intCast(fx.rand(2))][p];
+        const imgs: []const Image = if (!mid) &fx.s.rock_small[p] else &fx.s.rock_mid[@intCast(fx.rand(2))][p];
         const lifetime = 1.1 + 0.1 * @as(f64, @floatFromInt(fx.rand(10)));
         const x = x0 + fx.rand(8);
         const y = y0 + fx.rand(24);
@@ -648,7 +652,7 @@ pub const Effects = struct {
     fn mapObjectPiece(fx: *Effects, index: u8, from_x: i32, from_y: i32, to_x: i32, to_y: i32, offset: f64) void {
         const i = @min(index, sprites.map_objects - 1);
         const rise = 0.5 + 0.01 * @as(f64, @floatFromInt(fx.rand(100)));
-        const my: i32 = if (fx.s.map_object[i]) |img| 16 - img.height() else 0;
+        const my: i32 = 16 - fx.s.map_object[i].height();
         const from: Point = .of(from_x + 5 - fx.rand(10), from_y + 5 - fx.rand(10) + my);
         var spin: f64 = @floatFromInt(240 - fx.rand(480));
         spin += if (spin >= 0) 100 else -100;
@@ -657,7 +661,7 @@ pub const Effects = struct {
 
     const WreckKind = enum { jeep, launcher, apc, crane, tank };
 
-    fn wreck(fx: *Effects, kind: WreckKind, img: ?Image, x: i32, y: i32) void {
+    fn wreck(fx: *Effects, kind: WreckKind, img: Image, x: i32, y: i32) void {
         var w: Wreck = .{ .img = img, .x = x, .y = y, .until = fx.time + 5 + @as(f64, @floatFromInt(fx.rand(3))) };
         // Where fires burn on the wreck.
         const bx: i32, const by: i32, const bw: u32, const bh: u32 = switch (kind) {
@@ -697,7 +701,7 @@ pub const Effects = struct {
         if (lay[0] or lay[1]) {
             const kind: usize = if (veh.type == .jeep) 1 else 0;
             const imgs = &fx.s.track[kind][p][direction];
-            if (imgs[0] != null) fx.addGround(.{ .track = .{ .imgs = imgs, .pos = pos, .lay = lay, .start = fx.time + 0.1 * @as(f64, @floatFromInt(fx.rand(10))), .i = 0 } });
+            fx.addGround(.{ .track = .{ .imgs = imgs, .pos = pos, .lay = lay, .start = fx.time + 0.1 * @as(f64, @floatFromInt(fx.rand(10))), .i = 0 } });
             for (lay, pos) |l, pt| {
                 if (!l or fx.rand(4) == 0) continue;
                 const dirts: u32 = switch (fx.planet) {
@@ -707,7 +711,7 @@ pub const Effects = struct {
                 };
                 if (dirts == 0) continue;
                 const d: usize = @intCast(fx.rand(dirts));
-                const first = fx.s.tank_dirt[p][d][0] orelse continue;
+                const first = fx.s.tank_dirt[p][d][0];
                 const n: usize = if (fx.planet == .jungle) 6 else 5;
                 fx.addGround(.{ .anim = .{ .imgs = fx.s.tank_dirt[p][d][0..n], .x = pt[0] - (first.width() >> 1), .y = pt[1] - first.height(), .frames = .init(fx.time, 0.15) } });
             }
@@ -763,7 +767,7 @@ pub const Effects = struct {
 
     fn tankSmoke(fx: *Effects, cx: i32, cy: i32, direction: u3, with_sparks: bool) void {
         const imgs = &fx.s.track_dust[direction];
-        const first = imgs[0] orelse return;
+        const first = imgs[0];
         const w = first.width();
         const h = first.height();
         var x = cx;
@@ -907,7 +911,7 @@ pub const Effects = struct {
                 fx.robotFlip(o.owner, o.center_x, o.center_y)
             else if (o.owner != .none) {
                 const team = @intFromEnum(o.owner);
-                const imgs: []const ?Image = if (fire_death) &fx.s.robot_melt[team] else blk: {
+                const imgs: []const Image = if (fire_death) &fx.s.robot_melt[team] else blk: {
                     const d: usize = @intCast(fx.rand(4));
                     break :blk fx.s.robot_die[d][team][0..if (d == 3) 8 else 10];
                 };
@@ -920,7 +924,7 @@ pub const Effects = struct {
                 .crane => fx.wreck(.crane, fx.s.crane_wasted, o.x, o.y),
                 .light, .medium, .heavy => {
                     const img = all_sprites.vehicle[@intFromEnum(veh.type)].damaged[@intFromEnum(o.owner)][look.direction][@min(look.move_i, 2)];
-                    if (img != null) fx.wreck(.tank, img, o.x, o.y);
+                    fx.wreck(.tank, img, o.x, o.y);
                 },
             },
             .building => |b| switch (b.type) {
@@ -1207,8 +1211,8 @@ pub const Effects = struct {
     // -----------------------------------------------------------------------
 
     /// Draw `img` turned and scaled, from its corner or centered on (x, y).
-    fn put(fx: *Effects, cv: Canvas, view: gfx.Rect, img: ?Image, x: i32, y: i32, angle: f64, size: f64, centered: bool) void {
-        const i = img orelse return;
+    fn put(fx: *Effects, cv: Canvas, view: gfx.Rect, img: Image, x: i32, y: i32, angle: f64, size: f64, centered: bool) void {
+        const i = img;
         // Skip what is well off screen before transforming.
         const margin = 2 * @max(i.width(), i.height()) + 32;
         if (x < view.x - margin or y < view.y - margin or x > view.x + view.w + margin or y > view.y + view.h + margin) return;
@@ -1309,7 +1313,7 @@ pub const Effects = struct {
                 fx.put(cv, view, s.map_object[p.index], int(at.x), int(at.y - lift * 30), @mod(p.spin * (t - p.arc.line.t0), 360), lift + 1, true);
             },
             .wreck => |*w| {
-                if (w.img) |img| cv.draw(img, w.x, w.y);
+                cv.draw(w.img, w.x, w.y);
                 for (w.fires[0..w.fire_n]) |*f| f.draw(cv, s);
             },
             .track => |tr| for (tr.pos, tr.lay) |p, lay| {
@@ -1399,11 +1403,11 @@ fn effectsBox(o: *const Object) gfx.Rect {
 
 test "effects run their course" {
     const gpa = std.testing.allocator;
-    const palettes = gfx.TeamPalettes.load("bin/assets");
-    const all = try sprites.Sprites.load(gpa, "bin/assets", &palettes);
-    defer all.deinit();
+    const a = try @import("assets.zig").Assets.init(gpa, "bin/assets");
+    defer a.deinit();
+    const all = try sprites.Sprites.load(a);
     var prng = std.Random.DefaultPrng.init(1);
-    var fx = Effects.init(gpa, all, &palettes, prng.random());
+    var fx = Effects.init(gpa, all, &a.palettes, prng.random());
     defer fx.deinit();
 
     const io = std.testing.io;
@@ -1428,8 +1432,8 @@ test "effects run their course" {
     fx.robotFlip(.green, 60, 60);
     fx.wreck(.jeep, fx.s.jeep_wasted, 40, 40);
 
-    const screen = Image.create(320, 240).?;
-    defer screen.deinit();
+    const screen = try Image.create(gpa, 320, 240);
+    defer screen.deinit(gpa);
     const view: gfx.Rect = .{ .x = 0, .y = 0, .w = 320, .h = 240 };
     const cv: Canvas = .{ .target = screen, .clip = view };
 

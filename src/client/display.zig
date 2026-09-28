@@ -9,6 +9,7 @@ const gfx = @import("gfx.zig");
 pub const Error = error{ SdlInitFailed, SdlWindowFailed, OutOfMemory };
 
 pub const Display = struct {
+    gpa: std.mem.Allocator,
     window: *c.SDL_Window,
     renderer: *c.SDL_Renderer,
     texture: *c.SDL_Texture,
@@ -16,7 +17,7 @@ pub const Display = struct {
     frame: gfx.Image,
 
     /// Open a window (and SDL).
-    pub fn open(title: [:0]const u8, w: i32, h: i32, fullscreen: bool) Error!Display {
+    pub fn open(gpa: std.mem.Allocator, title: [:0]const u8, w: i32, h: i32, fullscreen: bool) Error!Display {
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
             std.log.err("SDL: {s}", .{c.SDL_GetError()});
             return error.SdlInitFailed;
@@ -35,7 +36,7 @@ pub const Display = struct {
             c.SDL_DestroyWindow(window);
         }
         _ = c.SDL_HideCursor();
-        var d: Display = .{ .window = window.?, .renderer = renderer.?, .texture = undefined, .frame = undefined };
+        var d: Display = .{ .gpa = gpa, .window = window.?, .renderer = renderer.?, .texture = undefined, .frame = undefined };
         // Full screen may have given another size.
         var ww: c_int = w;
         var wh: c_int = h;
@@ -46,15 +47,15 @@ pub const Display = struct {
 
     pub fn close(d: *Display) void {
         c.SDL_DestroyTexture(d.texture);
-        d.frame.deinit();
+        d.frame.deinit(d.gpa);
         c.SDL_DestroyRenderer(d.renderer);
         c.SDL_DestroyWindow(d.window);
         c.SDL_Quit();
     }
 
     fn makeFrame(d: *Display, w: i32, h: i32) Error!void {
-        d.frame = gfx.Image.create(@max(w, 1), @max(h, 1)) orelse return error.OutOfMemory;
-        errdefer d.frame.deinit();
+        d.frame = try gfx.Image.create(d.gpa, @max(w, 1), @max(h, 1));
+        errdefer d.frame.deinit(d.gpa);
         d.texture = c.SDL_CreateTexture(d.renderer, c.SDL_PIXELFORMAT_ARGB8888, c.SDL_TEXTUREACCESS_STREAMING, d.frame.w, d.frame.h) orelse return error.SdlWindowFailed;
         _ = c.SDL_SetTextureScaleMode(d.texture, c.SDL_SCALEMODE_NEAREST);
         // The frame's alpha means nothing on screen.
@@ -65,7 +66,7 @@ pub const Display = struct {
     pub fn resize(d: *Display, w: i32, h: i32) Error!void {
         if (w == d.frame.w and h == d.frame.h) return;
         c.SDL_DestroyTexture(d.texture);
-        d.frame.deinit();
+        d.frame.deinit(d.gpa);
         try d.makeFrame(w, h);
     }
 
