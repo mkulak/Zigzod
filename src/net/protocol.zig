@@ -303,6 +303,71 @@ pub const Version = extern struct {
     version: [max_version_chars]u8,
 };
 
+// ---------------------------------------------------------------------------
+// Structures embedded in variable-length messages
+// ---------------------------------------------------------------------------
+
+/// What a unit is told to do (SEND_WAYPOINTS / SEND_RALLYPOINTS carry
+/// `i32 ref_id, i32 count` followed by `count` of these).
+pub const Waypoint = extern struct {
+    mode: WaypointMode = .none,
+    ref_id: i32 align(1) = -1,
+    x: i32 align(1) = 0,
+    y: i32 align(1) = 0,
+    /// Attack enemies met on the way.
+    attack_to: bool = false,
+    player_given: bool = false,
+
+    pub fn eql(a: Waypoint, b: Waypoint) bool {
+        return a.mode == b.mode and a.ref_id == b.ref_id and a.x == b.x and a.y == b.y and
+            a.attack_to == b.attack_to and a.player_given == b.player_given;
+    }
+};
+
+pub const WaypointMode = enum(i8) {
+    none = -1,
+    move,
+    enter,
+    attack,
+    force_move,
+    crane_repair,
+    unit_repair,
+    agro,
+    enter_fort,
+    dodge,
+    pickup_grenades,
+    _,
+};
+
+/// Position and velocity (SEND_LOC carries `i32 ref_id` + this).
+pub const Location = extern struct {
+    x: i32 align(1),
+    y: i32 align(1),
+    dx: f32 align(1),
+    dy: f32 align(1),
+};
+
+/// A turret shot fired when an object is destroyed (appended to
+/// DESTROY_OBJECT).
+pub const FireMissileInfo = extern struct {
+    offset_time: f64 align(1),
+    x: i32 align(1),
+    y: i32 align(1),
+};
+
+/// A robot sitting in a vehicle or cannon (appended to SET_OBJECT_TEAM).
+pub const DriverInfo = extern struct {
+    health: i32 align(1),
+    next_attack_time: f64 align(1) = 0,
+};
+
+/// A queued unit (SET_BUILDING_QUEUE_LIST carries `i32 ref_id, i32 count`
+/// followed by these).
+pub const ProductionUnit = extern struct {
+    ot: u8,
+    oid: u8,
+};
+
 comptime {
     // Sizes of the packed C++ structs.
     std.debug.assert(@sizeOf(ObjectInit) == 22);
@@ -313,6 +378,11 @@ comptime {
     std.debug.assert(@sizeOf(RepairBuildingAnim) == 14);
     std.debug.assert(@sizeOf(ObjectTeam) == 7);
     std.debug.assert(@sizeOf(VoteInfo) == 9);
+    std.debug.assert(@sizeOf(Waypoint) == 15);
+    std.debug.assert(@sizeOf(Location) == 16);
+    std.debug.assert(@sizeOf(FireMissileInfo) == 16);
+    std.debug.assert(@sizeOf(DriverInfo) == 12);
+    std.debug.assert(@sizeOf(ProductionUnit) == 2);
 }
 
 // ---------------------------------------------------------------------------
