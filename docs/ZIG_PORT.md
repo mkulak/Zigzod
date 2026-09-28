@@ -72,7 +72,7 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/windows.zig  production window, factory list
       client/messages.zig news and chat lines, computer messages, vote box
       client/portrait.zig the talking faces in the HUD
-      client/portrait_frames.zig  their animation frames (data)
+      client/portrait_frames.zon  their animation frames (data)
       client/sound.zig    sound effects, voices, music (SDL3 audio streams,
                           stb_vorbis)
       client/menus.zig    in-game menus (main, options, teams, bots,

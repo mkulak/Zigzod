@@ -1,13 +1,12 @@
 //! The talking face in the HUD (ZPortrait): the robot driving the selected
 //! unit, built from a head, eyes, mouth, shoulders and a hand, animated
-//! with the frames in portrait_frames.zig. It says something when units
+//! with the frames in portrait_frames.zon. It says something when units
 //! are selected or ordered, when they are attacked, and now and then just
 //! blinks or looks around.
 
 const std = @import("std");
 const k = @import("../game/constants.zig");
 const gfx = @import("gfx.zig");
-const frames = @import("portrait_frames.zig");
 const Object = @import("../game/object.zig").Object;
 
 const Image = gfx.Image;
@@ -23,6 +22,27 @@ const mouth_count = 16;
 
 /// Animations, in the order of the C++ enum (the wire ids of
 /// DO_PORTRAIT_ANIM are these).
+pub const Look = enum(u2) { straight, right, left };
+
+/// One frame of a face's animation.
+pub const Frame = struct {
+    /// In steps of `tick`.
+    ticks: u8,
+    look: Look = .straight,
+    head_y: i8,
+    mouth: u8,
+    eyes: u8 = 0,
+    /// Hand picture and where it is (none if null).
+    hand: ?u8 = null,
+    hand_x: i8 = 0,
+    hand_y: i8 = 0,
+};
+
+pub const tick = 0.015;
+
+/// The frames of each animation (data in portrait_frames.zon).
+const anims = std.enums.EnumArray(Anim, []const Frame).init(@import("portrait_frames.zon"));
+
 pub const Anim = enum(u8) {
     yes_sir,
     yes_sir3,
@@ -94,14 +114,10 @@ pub const Anim = enum(u8) {
     end_lost2,
     end_lost3,
 
-    comptime {
-        std.debug.assert(@typeInfo(Anim).@"enum".fields.len == frames.anims.len);
-    }
-
     fn duration(a: Anim) f64 {
         var ticks: u32 = 0;
-        for (frames.anims[@intFromEnum(a)]) |f| ticks += f.ticks;
-        return @as(f64, @floatFromInt(ticks)) * frames.tick;
+        for (anims.get(a)) |f| ticks += f.ticks;
+        return @as(f64, @floatFromInt(ticks)) * tick;
     }
 };
 
@@ -201,7 +217,7 @@ pub const Portrait = struct {
 
     /// `time` is real time.
     pub fn play(p: *Portrait, anim: Anim, time: f64) void {
-        if (frames.anims[@intFromEnum(anim)].len == 0) return;
+        if (anims.get(anim).len == 0) return;
         p.anim = anim;
         p.start = time;
         p.said = anim;
@@ -225,17 +241,17 @@ pub const Portrait = struct {
     }
 
     /// The frame to show now.
-    fn frame(p: *const Portrait, time: f64) frames.Frame {
-        const still: frames.Frame = .{ .ticks = 0, .look = .straight, .head_y = 2, .mouth = 0, .eyes = 0, .hand = null, .hand_x = 0, .hand_y = 0 };
+    fn frame(p: *const Portrait, time: f64) Frame {
+        const still: Frame = .{ .ticks = 0, .look = .straight, .head_y = 2, .mouth = 0, .eyes = 0, .hand = null, .hand_x = 0, .hand_y = 0 };
         const a = p.anim orelse return still;
-        const list = frames.anims[@intFromEnum(a)];
+        const list = anims.get(a);
         const t = time - p.start;
         var at: f64 = 0;
         var shown = still;
         for (list) |f| {
             if (at > t) break;
             shown = f;
-            at += @as(f64, @floatFromInt(f.ticks)) * frames.tick;
+            at += @as(f64, @floatFromInt(f.ticks)) * tick;
         }
         return shown;
     }
