@@ -142,6 +142,8 @@ pub const App = struct {
 
         var display = try Display.open(gpa, "Zod Engine", options.width, options.height, options.fullscreen);
         errdefer display.close();
+        const splash_shown = std.Io.Clock.awake.now(io);
+        showSplash(&display, assets);
 
         const seed: u64 = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
         const sprites = try Sprites.load(assets);
@@ -158,6 +160,7 @@ pub const App = struct {
         const msg_images = try messages.Images.load(assets);
         const menu_art = try menus.Art.load(assets);
 
+        waitSplash(io, splash_shown);
         try session.start();
         const app = try gpa.create(App);
         app.* = .{
@@ -188,6 +191,31 @@ pub const App = struct {
             .clock_origin = std.Io.Clock.awake.now(io),
         };
         return app;
+    }
+
+    /// The splash picture while the rest loads.
+    fn showSplash(d: *Display, assets: *Assets) void {
+        const img = assets.image("splash.png", .{}) catch return;
+        d.frame.fill(null, .{ .r = 0, .g = 0, .b = 0 });
+        d.frame.draw(img, null, (d.frame.w - img.width()) >> 1, (d.frame.h - img.height()) >> 1);
+        // Some systems show the window only once its events are handled.
+        var ev: c.SDL_Event = undefined;
+        while (c.SDL_PollEvent(&ev)) {}
+        d.present();
+    }
+
+    /// Leave the splash up for a moment (loading is quick); a key or a
+    /// click goes on at once.
+    fn waitSplash(io: std.Io, shown: std.Io.Timestamp) void {
+        const least = 1.5 * std.time.ns_per_s;
+        while (shown.durationTo(std.Io.Clock.awake.now(io)).nanoseconds < least) {
+            var ev: c.SDL_Event = undefined;
+            while (c.SDL_PollEvent(&ev)) switch (ev.type) {
+                c.SDL_EVENT_KEY_DOWN, c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_QUIT => return,
+                else => {},
+            };
+            io.sleep(.fromMilliseconds(15), .awake) catch return;
+        }
     }
 
     pub fn deinit(app: *App) void {
