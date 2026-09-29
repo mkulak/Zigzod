@@ -432,18 +432,15 @@ pub const Server = struct {
     /// outbox so the order is kept).
     fn flushOutbox(s: *Server) Error!void {
         const w = &s.world;
-        defer {
-            for (w.outbox.items) |m| s.gpa.free(m.payload);
-            w.outbox.clearRetainingCapacity();
-        }
-        for (w.outbox.items) |m| {
+        defer w.outbox.clear();
+        for (w.outbox.messages.items) |m| {
             for (s.players.items) |p| {
                 const wanted = switch (m.to) {
                     .all => true,
                     .team => |t| p.team == t,
                     .player => |id| p.id == id,
                 };
-                if (wanted) try p.conn.send(s.gpa, m.id, m.payload);
+                if (wanted) try p.conn.send(s.gpa, m.id, w.outbox.payload(m));
             }
         }
         for (s.players.items) |p| p.conn.flush();
@@ -463,8 +460,7 @@ pub const Server = struct {
 
     pub fn newsFmt(s: *Server, to: Audience, comptime fmt: []const u8, args: anytype) Error!void {
         var buf: [512]u8 = undefined;
-        const text = std.fmt.bufPrint(&buf, fmt, args) catch buf[0..];
-        try s.news(to, text);
+        try s.news(to, fit(&buf, fmt, args));
     }
 
     // -----------------------------------------------------------------------
@@ -472,12 +468,10 @@ pub const Server = struct {
     // -----------------------------------------------------------------------
 
     fn relayName(s: *Server, p: *const Player, to: Audience) Error!void {
-        const data = try s.gpa.alloc(u8, 4 + p.name.items.len + 1);
-        defer s.gpa.free(data);
+        const data = try s.world.outbox.add(s.world.gpa, to, .set_lplayer_name, 4 + p.name.items.len + 1);
         std.mem.writeInt(i32, data[0..4], p.id, .little);
         @memcpy(data[4..][0..p.name.items.len], p.name.items);
         data[data.len - 1] = 0;
-        try s.send(to, .set_lplayer_name, data);
     }
 
     fn relayInt(s: *Server, p: *const Player, to: Audience, id: protocol.Message, value: i32) Error!void {

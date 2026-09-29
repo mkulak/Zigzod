@@ -1205,12 +1205,11 @@ test "a game runs: units move, fight and production continues" {
     for (0..12000) |_| {
         w.clock.ztime += 0.01;
         try step(&w);
-        for (w.outbox.items) |m| {
+        for (w.outbox.messages.items) |m| {
             if (m.id == .send_loc) moved = true;
             if (m.id == .fire_missile or m.id == .update_health) fired = true;
-            gpa.free(m.payload);
         }
-        w.outbox.clearRetainingCapacity();
+        w.outbox.clear();
     }
     try testing.expect(moved);
     try testing.expect(fired);

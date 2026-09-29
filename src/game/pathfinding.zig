@@ -42,6 +42,33 @@ pub const Grid = struct {
     vehicle_region: []i32,
     /// Scratch space for rebuildRegions.
     flood_queue: []u32,
+    /// Scratch space for path searches, kept between them.
+    search: Search,
+
+    const Search = struct {
+        cost: []u32,
+        parent: []u32,
+        closed: std.DynamicBitSetUnmanaged,
+        open: std.PriorityQueue(Open, void, Open.order) = .empty,
+        /// The path's tiles, goal first.
+        tiles: std.ArrayList(u32) = .empty,
+
+        fn init(gpa: std.mem.Allocator, n: usize) !Search {
+            const cost = try gpa.alloc(u32, n);
+            errdefer gpa.free(cost);
+            const parent = try gpa.alloc(u32, n);
+            errdefer gpa.free(parent);
+            return .{ .cost = cost, .parent = parent, .closed = try .initEmpty(gpa, n) };
+        }
+
+        fn deinit(sr: *Search, gpa: std.mem.Allocator) void {
+            gpa.free(sr.cost);
+            gpa.free(sr.parent);
+            sr.closed.deinit(gpa);
+            sr.open.deinit(gpa);
+            sr.tiles.deinit(gpa);
+        }
+    };
 
     pub fn init(gpa: std.mem.Allocator, w: u16, h: u16) !Grid {
         const n = @as(usize, w) * h;
@@ -53,9 +80,11 @@ pub const Grid = struct {
         const vehicle_region = try gpa.alloc(i32, n);
         errdefer gpa.free(vehicle_region);
         const flood_queue = try gpa.alloc(u32, n);
+        errdefer gpa.free(flood_queue);
+        const search: Search = try .init(gpa, n);
         @memset(robot_region, 0);
         @memset(vehicle_region, 0);
-        return .{ .area = .{ .w = w, .h = h }, .tiles = tiles, .robot_region = robot_region, .vehicle_region = vehicle_region, .flood_queue = flood_queue };
+        return .{ .area = .{ .w = w, .h = h }, .tiles = tiles, .robot_region = robot_region, .vehicle_region = vehicle_region, .flood_queue = flood_queue, .search = search };
     }
 
     /// Grid for a map's terrain (before any objects are placed).
@@ -78,6 +107,7 @@ pub const Grid = struct {
         gpa.free(g.robot_region);
         gpa.free(g.vehicle_region);
         gpa.free(g.flood_queue);
+        g.search.deinit(gpa);
         g.* = undefined;
     }
 
@@ -322,7 +352,7 @@ pub const Grid = struct {
     /// at the destination, or null when the unit should just move straight
     /// there (a direct line is free, or no path exists). The caller owns the
     /// returned slice.
-    pub fn findPath(g: *const Grid, gpa: std.mem.Allocator, sx: i32, sy: i32, ex: i32, ey: i32, is_robot: bool, has_explosives: bool) !?[]Point {
+    pub fn findPath(g: *Grid, gpa: std.mem.Allocator, sx: i32, sy: i32, ex: i32, ey: i32, is_robot: bool, has_explosives: bool) !?[]Point {
         if (g.directPathPossible(sx, sy, ex, ey, is_robot, has_explosives)) return null;
         if (!g.inSameRegion(sx, sy, ex, ey, is_robot)) return null;
 
@@ -349,18 +379,15 @@ pub const Grid = struct {
 
     /// A* over tiles; appends the path's turning points (tile coordinates,
     /// start included, end tile last) or nothing if there is no path.
-    fn astar(g: *const Grid, gpa: std.mem.Allocator, layer: Layer, is_robot: bool, start_x: i32, start_y: i32, end_x: i32, end_y: i32, path: *std.ArrayList(Point)) !void {
-        const n = g.tiles.len;
-        const cost = try gpa.alloc(u32, n);
-        defer gpa.free(cost);
-        const parent = try gpa.alloc(u32, n);
-        defer gpa.free(parent);
-        var closed = try std.DynamicBitSetUnmanaged.initEmpty(gpa, n);
-        defer closed.deinit(gpa);
+    fn astar(g: *Grid, gpa: std.mem.Allocator, layer: Layer, is_robot: bool, start_x: i32, start_y: i32, end_x: i32, end_y: i32, path: *std.ArrayList(Point)) !void {
+        const sr = &g.search;
+        const cost = sr.cost;
+        const parent = sr.parent;
+        const closed = &sr.closed;
+        const open = &sr.open;
         @memset(cost, std.math.maxInt(u32));
-
-        var open: std.PriorityQueue(Open, void, Open.order) = .empty;
-        defer open.deinit(gpa);
+        closed.unsetAll();
+        open.clearRetainingCapacity();
 
         const start = g.index(start_x, start_y).?;
         const goal = g.index(end_x, end_y).?;
@@ -404,8 +431,8 @@ pub const Grid = struct {
 
         // Walk back from the goal, keeping only the points where the
         // direction changes.
-        var tiles: std.ArrayList(u32) = .empty;
-        defer tiles.deinit(gpa);
+        const tiles = &sr.tiles;
+        tiles.clearRetainingCapacity();
         var i: u32 = goal;
         while (true) {
             try tiles.append(gpa, i);

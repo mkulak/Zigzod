@@ -59,15 +59,6 @@ pub const Event = union(enum) {
     pickup_grenades: i32,
     team_ended: protocol.TeamEnded,
     version: []u8,
-
-    fn deinit(e: Event, gpa: std.mem.Allocator) void {
-        switch (e) {
-            .news => |n| gpa.free(n.text),
-            .destroyed => |d| gpa.free(d.missiles),
-            .version => |v| gpa.free(v),
-            else => {},
-        }
-    }
 };
 
 pub const Vote = struct {
@@ -102,6 +93,8 @@ pub const Session = struct {
 
     motion: std.AutoHashMapUnmanaged(i32, Motion) = .empty,
     events: std.ArrayList(Event) = .empty,
+    /// What the events carry (texts, lists); freed with them.
+    event_arena: std.heap.ArenaAllocator,
     /// Objects deleted since the events were last cleared (events may
     /// still refer to them).
     removed: std.ArrayList(*Object) = .empty,
@@ -112,11 +105,14 @@ pub const Session = struct {
             .conn = conn,
             .world = World.init(gpa, terrain, 0),
             .options = options,
+            .event_arena = .init(gpa),
         };
     }
 
     pub fn deinit(s: *Session) void {
         const gpa = s.gpa;
+        // (Removed objects go back to the world's pool first.)
+        s.clearEvents();
         s.conn.deinit(gpa);
         s.world.deinit();
         for (s.players.items) |*p| p.name.deinit(gpa);
@@ -126,18 +122,15 @@ pub const Session = struct {
         s.server_version.deinit(gpa);
         s.map_download.deinit(gpa);
         s.motion.deinit(gpa);
-        s.clearEvents();
         s.events.deinit(gpa);
+        s.event_arena.deinit();
         s.removed.deinit(gpa);
     }
 
     pub fn clearEvents(s: *Session) void {
-        for (s.events.items) |e| e.deinit(s.gpa);
         s.events.clearRetainingCapacity();
-        for (s.removed.items) |o| {
-            o.deinit(s.gpa);
-            s.gpa.destroy(o);
-        }
+        _ = s.event_arena.reset(.retain_capacity);
+        for (s.removed.items) |o| s.world.releaseObject(o);
         s.removed.clearRetainingCapacity();
     }
 
@@ -344,7 +337,7 @@ pub const Session = struct {
             .news => {
                 if (data.len < 4) return;
                 const text = protocol.decodeString(data[3..]);
-                try s.emit(.{ .news = .{ .text = try s.gpa.dupe(u8, text), .color = data[0..3].* } });
+                try s.emit(.{ .news = .{ .text = try s.event_arena.allocator().dupe(u8, text), .color = data[0..3].* } });
             },
             .comp_msg => if (protocol.decode(protocol.ComputerMsg, data)) |v| try s.emit(.{ .comp_msg = v }),
             .do_portrait_anim => if (protocol.decode(protocol.DoPortraitAnim, data)) |v| try s.emit(.{ .portrait_anim = v }),
@@ -438,7 +431,7 @@ pub const Session = struct {
                 const v = protocol.decode(protocol.Version, data) orelse return;
                 s.server_version.clearRetainingCapacity();
                 try s.server_version.appendSlice(s.gpa, protocol.decodeString(&v.version));
-                try s.emit(.{ .version = try s.gpa.dupe(u8, s.server_version.items) });
+                try s.emit(.{ .version = try s.event_arena.allocator().dupe(u8, s.server_version.items) });
             },
             else => {},
         }
@@ -499,10 +492,7 @@ pub const Session = struct {
         }
         _ = s.motion.remove(o.ref_id);
         _ = w.objects.orderedRemove(i);
-        s.removed.append(s.gpa, o) catch {
-            o.deinit(s.gpa);
-            s.gpa.destroy(o);
-        };
+        s.removed.append(s.gpa, o) catch s.world.releaseObject(o);
     }
 
     fn destroyObject(s: *Session, data: []const u8) Error!void {
@@ -513,7 +503,7 @@ pub const Session = struct {
         if (data.len != size + n * @sizeOf(protocol.FireMissileInfo)) return;
         const o = s.find(v.ref_id) orelse return;
         s.world.setHealth(o, 0);
-        const missiles = try s.gpa.alloc(protocol.FireMissileInfo, n);
+        const missiles = try s.event_arena.allocator().alloc(protocol.FireMissileInfo, n);
         for (missiles, std.mem.bytesAsSlice(protocol.FireMissileInfo, data[size..])) |*dst, src| dst.* = src;
         try s.emit(.{ .destroyed = .{
             .ref_id = v.ref_id,
@@ -533,10 +523,10 @@ pub const Session = struct {
         if (data.len < 12 or data.len % 4 != 0) return;
         const ints = std.mem.bytesAsSlice(i32, data);
         const o = s.find(std.mem.littleToNative(i32, ints[0])) orelse return;
-        const n = ints.len - 3;
+        const n: usize = @intCast(std.math.clamp(std.mem.littleToNative(i32, ints[2]), 0, @as(i32, @intCast(ints.len - 3))));
         o.leader = if (s.find(std.mem.littleToNative(i32, ints[1])) != null) std.mem.littleToNative(i32, ints[1]) else null;
         o.minions.clearRetainingCapacity();
-        for (ints[2 .. 2 + n]) |id| {
+        for (ints[3..][0..n]) |id| {
             const ref_id = std.mem.littleToNative(i32, id);
             if (s.find(ref_id) != null) try o.minions.append(s.gpa, ref_id);
         }

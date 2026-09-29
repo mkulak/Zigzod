@@ -14,9 +14,7 @@ const CompSound = world.CompSound;
 const PortraitAnim = world.PortraitAnim;
 
 pub fn send(w: *World, to: Audience, id: protocol.Message, payload: []const u8) Error!void {
-    const copy = try w.gpa.dupe(u8, payload);
-    errdefer w.gpa.free(copy);
-    try w.outbox.append(w.gpa, .{ .to = to, .id = id, .payload = copy });
+    @memcpy(try w.outbox.add(w.gpa, to, id, payload.len), payload);
 }
 
 pub fn sendPacket(w: *World, to: Audience, id: protocol.Message, packet: anytype) Error!void {
@@ -80,59 +78,48 @@ pub fn relayAttackTarget(w: *World, o: *Object) Error!void {
     try sendPacket(w, .all, .set_attack_object, protocol.AttackObject{ .ref_id = o.ref_id, .attack_object_ref_id = o.attack_target orelse -1 });
 }
 
-fn waypointData(w: *World, ref_id: i32, list: []const Waypoint) Error![]u8 {
-    const data = try w.gpa.alloc(u8, 8 + list.len * @sizeOf(Waypoint));
+/// `i32 ref_id, i32 count, waypoints...`
+fn sendWaypoints(w: *World, to: Audience, id: protocol.Message, ref_id: i32, list: []const Waypoint) Error!void {
+    const data = try w.outbox.add(w.gpa, to, id, 8 + list.len * @sizeOf(Waypoint));
     std.mem.writeInt(i32, data[0..4], ref_id, .little);
     std.mem.writeInt(i32, data[4..8], @intCast(list.len), .little);
     @memcpy(data[8..], std.mem.sliceAsBytes(list));
-    return data;
 }
 
 /// Waypoints are only shown to the unit's own team.
 pub fn relayWaypoints(w: *World, o: *Object) Error!void {
-    const data = try waypointData(w, o.ref_id, o.waypoints.items);
-    defer w.gpa.free(data);
-    try send(w, .{ .team = o.owner }, .send_waypoints, data);
+    try sendWaypoints(w, .{ .team = o.owner }, .send_waypoints, o.ref_id, o.waypoints.items);
 }
 
 pub fn relayRallypoints(w: *World, o: *Object, to: Audience) Error!void {
     if (!o.canSetRallypoints()) return;
-    const data = try waypointData(w, o.ref_id, o.rallypoints.items);
-    defer w.gpa.free(data);
-    try send(w, to, .send_rallypoints, data);
+    try sendWaypoints(w, to, .send_rallypoints, o.ref_id, o.rallypoints.items);
 }
 
 pub fn relayTeam(w: *World, o: *Object) Error!void {
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(w.gpa);
     const header: protocol.ObjectTeam = .{
         .ref_id = o.ref_id,
         .owner = @intCast(@intFromEnum(o.owner)),
         .driver_type = @intCast(@intFromEnum(o.driver_type)),
         .driver_amount = @intCast(o.drivers.items.len),
     };
-    try buf.appendSlice(w.gpa, std.mem.asBytes(&header));
-    try buf.appendSlice(w.gpa, std.mem.sliceAsBytes(o.drivers.items));
-    try send(w, .all, .set_object_team, buf.items);
+    const drivers = std.mem.sliceAsBytes(o.drivers.items);
+    const data = try w.outbox.add(w.gpa, .all, .set_object_team, @sizeOf(protocol.ObjectTeam) + drivers.len);
+    @memcpy(data[0..@sizeOf(protocol.ObjectTeam)], std.mem.asBytes(&header));
+    @memcpy(data[@sizeOf(protocol.ObjectTeam)..], drivers);
 }
 
 /// OBJECT_GROUP_INFO: `i32 ref_id, i32 leader, i32 count, ids...`.
-/// NOTE: the original wrote the minion ids starting at the count's slot
-/// (and read them back the same way), so squads with minions never got
-/// through to C++ clients. These bytes reproduce that exactly while C++
-/// clients may connect.
+/// (The original wrote the ids over the count, so C++ clients never got
+/// squads' minions.)
 pub fn relayGroupInfo(w: *World, o: *Object, to: Audience) Error!void {
     if (o.kind != .robot) return;
     const n = o.minions.items.len;
-    const data = try w.gpa.alloc(u8, 12 + 4 * n);
-    defer w.gpa.free(data);
-    @memset(data, 0);
-    const ints: []align(1) i32 = std.mem.bytesAsSlice(i32, data);
-    ints[0] = o.ref_id;
-    ints[1] = o.leader orelse -1;
-    ints[2] = @intCast(n);
-    for (o.minions.items, 0..) |id, i| ints[2 + i] = id;
-    try send(w, to, .object_group_info, data);
+    const data = try w.outbox.add(w.gpa, to, .object_group_info, 12 + 4 * n);
+    std.mem.writeInt(i32, data[0..4], o.ref_id, .little);
+    std.mem.writeInt(i32, data[4..8], o.leader orelse -1, .little);
+    std.mem.writeInt(i32, data[8..12], @intCast(n), .little);
+    for (o.minions.items, 0..) |id, i| std.mem.writeInt(i32, data[12 + 4 * i ..][0..4], id, .little);
 }
 
 pub fn relayGrenadeAmount(w: *World, o: *Object, to: Audience) Error!void {
@@ -142,26 +129,22 @@ pub fn relayGrenadeAmount(w: *World, o: *Object, to: Audience) Error!void {
 
 pub fn relayBuiltCannons(w: *World, o: *Object) Error!void {
     const b = o.building() orelse return;
-    const data = try w.gpa.alloc(u8, 8 + b.cannons.items.len);
-    defer w.gpa.free(data);
+    const data = try w.outbox.add(w.gpa, .all, .set_built_cannon_amount, 8 + b.cannons.items.len);
     std.mem.writeInt(i32, data[0..4], o.ref_id, .little);
     std.mem.writeInt(i32, data[4..8], @intCast(b.cannons.items.len), .little);
     for (b.cannons.items, 0..) |c, i| data[8 + i] = @intFromEnum(c);
-    try send(w, .all, .set_built_cannon_amount, data);
 }
 
 pub fn relayQueue(w: *World, o: *Object, to: Audience) Error!void {
     const b = o.building() orelse return;
     if (!b.producesUnits()) return;
-    const data = try w.gpa.alloc(u8, 8 + 2 * b.queue.items.len);
-    defer w.gpa.free(data);
+    const data = try w.outbox.add(w.gpa, to, .set_building_queue_list, 8 + 2 * b.queue.items.len);
     std.mem.writeInt(i32, data[0..4], o.ref_id, .little);
     std.mem.writeInt(i32, data[4..8], @intCast(b.queue.items.len), .little);
     for (b.queue.items, 0..) |u, i| {
         data[8 + 2 * i] = @intFromEnum(u.kind);
         data[9 + 2 * i] = u.id;
     }
-    try send(w, to, .set_building_queue_list, data);
 }
 
 pub fn relayRepairAnim(w: *World, o: *Object, to: Audience, play_sound: bool) Error!void {

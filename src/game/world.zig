@@ -36,10 +36,44 @@ pub const Audience = union(enum) {
     player: i32,
 };
 
-pub const Outgoing = struct {
-    to: Audience,
-    id: protocol.Message,
-    payload: []u8,
+/// Messages waiting to be sent, in order. Their payloads are kept one
+/// after the other in one buffer, so queueing a message allocates nothing
+/// once the buffers have grown, and sending them all frees nothing.
+pub const Outbox = struct {
+    bytes: std.ArrayList(u8) = .empty,
+    messages: std.ArrayList(Message) = .empty,
+
+    pub const Message = struct {
+        to: Audience,
+        id: protocol.Message,
+        start: u32,
+        len: u32,
+    };
+
+    pub fn deinit(o: *Outbox, gpa: std.mem.Allocator) void {
+        o.bytes.deinit(gpa);
+        o.messages.deinit(gpa);
+    }
+
+    /// Queue a message with a `len` byte payload, returned to be filled in
+    /// (before anything else is queued).
+    pub fn add(o: *Outbox, gpa: std.mem.Allocator, to: Audience, id: protocol.Message, len: usize) Error![]u8 {
+        const start = o.bytes.items.len;
+        try o.messages.ensureUnusedCapacity(gpa, 1);
+        const room = try o.bytes.addManyAsSlice(gpa, len);
+        o.messages.appendAssumeCapacity(.{ .to = to, .id = id, .start = @intCast(start), .len = @intCast(len) });
+        return room;
+    }
+
+    pub fn payload(o: *const Outbox, m: Message) []const u8 {
+        return o.bytes.items[m.start..][0..m.len];
+    }
+
+    /// Everything was sent.
+    pub fn clear(o: *Outbox) void {
+        o.bytes.clearRetainingCapacity();
+        o.messages.clearRetainingCapacity();
+    }
 };
 
 /// An explosion that will happen at `explode_time`.
@@ -66,8 +100,9 @@ pub const World = struct {
     grid: ?pathfinding.Grid = null,
     zones: std.ArrayList(mapfmt.Zone) = .empty,
 
-    /// All objects, sorted by ref id.
+    /// All objects, sorted by ref id (allocated from `object_pool`).
     objects: std.ArrayList(*Object) = .empty,
+    object_pool: std.heap.MemoryPool(Object) = .empty,
     /// Units produced during a step, added after it.
     new_objects: std.ArrayList(*Object) = .empty,
     next_ref_id: i32 = 0,
@@ -75,7 +110,7 @@ pub const World = struct {
     clock: Clock = .{},
     missiles: std.ArrayList(DamageMissile) = .empty,
     new_missiles: std.ArrayList(DamageMissile) = .empty,
-    outbox: std.ArrayList(Outgoing) = .empty,
+    outbox: Outbox = .{},
     rng: std.Random.DefaultPrng,
 
     max_units_per_team: i32 = k.default_max_units_per_team,
@@ -91,20 +126,20 @@ pub const World = struct {
 
     pub fn deinit(w: *World) void {
         w.clear();
+        w.object_pool.deinit(w.gpa);
         w.objects.deinit(w.gpa);
         w.new_objects.deinit(w.gpa);
         w.zones.deinit(w.gpa);
         w.missiles.deinit(w.gpa);
         w.new_missiles.deinit(w.gpa);
-        for (w.outbox.items) |m| w.gpa.free(m.payload);
         w.outbox.deinit(w.gpa);
     }
 
     /// Remove the map and all objects.
     pub fn clear(w: *World) void {
-        for (w.objects.items) |o| w.destroyObject(o);
+        for (w.objects.items) |o| w.releaseObject(o);
         w.objects.clearRetainingCapacity();
-        for (w.new_objects.items) |o| w.destroyObject(o);
+        for (w.new_objects.items) |o| w.releaseObject(o);
         w.new_objects.clearRetainingCapacity();
         w.missiles.clearRetainingCapacity();
         w.new_missiles.clearRetainingCapacity();
@@ -117,9 +152,10 @@ pub const World = struct {
         w.grid = null;
     }
 
-    fn destroyObject(w: *World, o: *Object) void {
+    /// Free an object that is no longer in the lists.
+    pub fn releaseObject(w: *World, o: *Object) void {
         o.deinit(w.gpa);
-        w.gpa.destroy(o);
+        w.object_pool.destroy(o);
     }
 
     pub fn random(w: *World) std.Random {
@@ -278,8 +314,8 @@ pub const World = struct {
             .extra_links = opts.extra_links,
         }) orelse return null;
 
-        const o = try w.gpa.create(Object);
-        errdefer w.gpa.destroy(o);
+        const o = try w.object_pool.create(w.gpa);
+        errdefer w.object_pool.destroy(o);
         o.* = template;
         template = undefined;
         o.owner = owner;
@@ -339,7 +375,7 @@ pub const World = struct {
         }
         _ = w.objects.orderedRemove(index);
         const ref_id = o.ref_id;
-        w.destroyObject(o);
+        w.releaseObject(o);
         w.checkUnitLimitReached();
         try w.send(.all, .delete_object, std.mem.asBytes(&ref_id));
     }
@@ -756,7 +792,7 @@ test "damage kills and eliminations" {
         if (o.owner == team and o.isUnit()) try testing.expect(o.isDestroyed());
     }
     var eliminated = false;
-    for (w.outbox.items) |m| if (m.id == .team_ended) {
+    for (w.outbox.messages.items) |m| if (m.id == .team_ended) {
         eliminated = true;
     };
     try testing.expect(eliminated);

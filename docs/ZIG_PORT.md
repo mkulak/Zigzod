@@ -88,6 +88,22 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
 client talking to a server over a real socket). Tests that read game data
 run from the repository root.
 
+## Memory
+
+* There is one general purpose allocator, the one `std.process.Init`
+  gives `main`; it is passed down explicitly. Long-lived owners (the
+  server, world, session, app, editor, renderer...) keep it as `gpa`;
+  containers are the unmanaged kind and get it per call.
+* What lives exactly as long as something else shares an arena: all art
+  lives in the assets' arena (freed at exit), what a frame's events carry
+  in the session's event arena (freed after each frame).
+* Objects come from a memory pool in the world; the world owns them, so
+  the client hands deleted ones back with `World.releaseObject`.
+* Messages for clients are written into one outbox buffer, and path
+  searches reuse scratch space kept with the grid: the server's steady
+  state allocates almost nothing.
+* Tests use `std.testing.allocator`, which fails a test that leaks.
+
 ## Errors
 
 * Running out of memory while changing game state (server, world, the
