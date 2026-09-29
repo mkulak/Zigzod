@@ -25,213 +25,26 @@ const Image = gfx.Image;
 const Canvas = gfx.Canvas;
 const Fx = sprites.EffectSprites;
 
-// ---------------------------------------------------------------------------
-// Rotated and scaled images
-// ---------------------------------------------------------------------------
-
-/// Rotated and scaled copies of images, made when first needed (angles in
-/// whole degrees counterclockwise, sizes in steps of 1/20). Copies that
-/// were not drawn for a while are dropped.
-pub const Transforms = struct {
-    gpa: std.mem.Allocator,
-    map: std.AutoHashMapUnmanaged(Key, Entry) = .empty,
-    frame: u32 = 0,
-
-    const Key = struct { src: [*]u32, angle: u16, size: u16 };
-    const Entry = struct { img: Image, used: u32 };
-    const size_steps = 20;
-    /// Frames between sweeps, and how long an unused copy is kept.
-    const sweep_interval = 128;
-    const keep_frames = 256;
-
-    pub fn deinit(t: *Transforms) void {
-        var it = t.map.valueIterator();
-        while (it.next()) |e| e.img.deinit(t.gpa);
-        t.map.deinit(t.gpa);
-    }
-
-    /// `img` turned by `angle` degrees and scaled by `size`; null if that
-    /// is too small to see (or there is no memory for it: effects are
-    /// only decoration).
-    pub fn get(t: *Transforms, img: Image, angle: f64, size: f64) ?Image {
-        const a: u16 = @intCast(@mod(@as(i32, @intFromFloat(@round(angle))), 360));
-        const s_f = @round(size * size_steps);
-        if (!(s_f >= 1)) return null;
-        const s: u16 = @intFromFloat(@min(s_f, 10 * size_steps));
-        if (a == 0 and s == size_steps) return img;
-        const key: Key = .{ .src = img.pixels, .angle = a, .size = s };
-        if (t.map.getPtr(key)) |e| {
-            e.used = t.frame;
-            return e.img;
-        }
-        const made = img.rotozoom(t.gpa, @floatFromInt(a), @as(f64, @floatFromInt(s)) / size_steps) catch return null;
-        t.map.put(t.gpa, key, .{ .img = made, .used = t.frame }) catch {
-            made.deinit(t.gpa);
-            return null;
-        };
-        return made;
-    }
-
-    /// Call once per drawn frame.
-    pub fn endFrame(t: *Transforms) void {
-        t.frame +%= 1;
-        if (t.frame % sweep_interval != 0) return;
-        var old: std.ArrayList(Key) = .empty;
-        defer old.deinit(t.gpa);
-        var it = t.map.iterator();
-        while (it.next()) |e| {
-            if (t.frame -% e.value_ptr.used < keep_frames) continue;
-            old.append(t.gpa, e.key_ptr.*) catch break;
-        }
-        for (old.items) |key| {
-            const e = t.map.fetchRemove(key).?;
-            e.value.img.deinit(t.gpa);
-        }
-    }
-};
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const Point = struct {
-    x: f64,
-    y: f64,
-
-    fn of(x: i32, y: i32) Point {
-        return .{ .x = @floatFromInt(x), .y = @floatFromInt(y) };
-    }
-};
-
-fn int(v: f64) i32 {
-    return @intFromFloat(std.math.clamp(@trunc(v), -1e9, 1e9));
-}
-
-/// Angle (degrees, counterclockwise from east) of a screen direction.
-fn angleOf(dx: f64, dy: f64) f64 {
-    if (game.object.isZero(dx) and game.object.isZero(dy)) return 0;
-    var a = std.math.atan2(dy, dx);
-    if (a < 0) a += 2 * std.math.pi;
-    return @mod(@floor(180.0 * a / std.math.pi + 0.5), 360);
-}
-
-/// Straight flight from `from` to `to` at `speed` pixels per second.
-const Line = struct {
-    start: Point,
-    end: Point,
-    /// Pixels per second.
-    vx: f64,
-    vy: f64,
-    t0: f64,
-    t1: f64,
-
-    fn init(from: Point, to: Point, speed: f64, time: f64) Line {
-        const dx = to.x - from.x;
-        const dy = to.y - from.y;
-        const duration = @max(@sqrt(dx * dx + dy * dy) / @max(speed, 1), 0.001);
-        return .{ .start = from, .end = to, .vx = dx / duration, .vy = dy / duration, .t0 = time, .t1 = time + duration };
-    }
-
-    fn at(l: Line, time: f64) Point {
-        const d = time - l.t0;
-        return .{ .x = l.start.x + l.vx * d, .y = l.start.y + l.vy * d };
-    }
-
-    /// How much to turn an image drawn pointing east to fly this way
-    /// (the C++ code's `359 - AngleFromLoc`).
-    fn imageAngle(l: Line) f64 {
-        return 359 - angleOf(l.vx, l.vy);
-    }
-};
-
-/// Debris flying in an arc: along a line over `lifetime`, lifted by a
-/// parabola peaking halfway (`lift` is 0 at both ends).
-const Arc = struct {
-    line: Line,
-    rise: f64,
-
-    fn init(from: Point, to: Point, lifetime: f64, rise: f64, time: f64) Arc {
-        const l = @max(lifetime, 0.001);
-        return .{ .line = .{ .start = from, .end = to, .vx = (to.x - from.x) / l, .vy = (to.y - from.y) / l, .t0 = time, .t1 = time + l }, .rise = rise };
-    }
-
-    fn lift(a: Arc, time: f64) f64 {
-        const d = time - a.line.t0;
-        return -(a.rise / (a.line.t1 - a.line.t0)) * d * d + a.rise * d;
-    }
-
-    fn done(a: Arc, time: f64) bool {
-        return time >= a.line.t1;
-    }
-};
-
-/// Frames advancing at a fixed interval.
-const Frames = struct {
-    i: u8 = 0,
-    next: f64,
-    interval: f64,
-
-    fn init(time: f64, interval: f64) Frames {
-        return .{ .next = time + interval, .interval = interval };
-    }
-
-    /// Advance if it's time; true if the frame changed.
-    fn tick(f: *Frames, time: f64) bool {
-        if (time < f.next) return false;
-        f.next = time + f.interval;
-        f.i += 1;
-        return true;
-    }
-};
+const motion = @import("effects/motion.zig");
+const Point = motion.Point;
+const Line = motion.Line;
+const Arc = motion.Arc;
+const Frames = motion.Frames;
+const int = motion.int;
+const angleOf = motion.angleOf;
+pub const Transforms = @import("effects/transforms.zig").Transforms;
+const fires = @import("effects/fires.zig");
+pub const FireKind = fires.FireKind;
+pub const Fire = fires.Fire;
+pub const BuildingFires = fires.BuildingFires;
+pub const effectsBox = fires.effectsBox;
+const deaths = @import("effects/deaths.zig");
+const update_mod = @import("effects/update.zig");
+const draw_mod = @import("effects/draw.zig");
 
 // ---------------------------------------------------------------------------
 // Effects
 // ---------------------------------------------------------------------------
-
-/// Kinds of fire and smoke on wrecks and damaged buildings (EStandard).
-pub const FireKind = enum { big_smoke, little_fire, small_fire_smoke, fire };
-
-/// A looping fire or smoke (EStandard). Wrecks and buildings own theirs.
-pub const Fire = struct {
-    kind: FireKind,
-    /// Where it burns (its bottom center, roughly).
-    base_x: i32,
-    base_y: i32,
-    frames: Frames,
-
-    pub fn init(kind: FireKind, x: i32, y: i32, rng: std.Random, time: f64) Fire {
-        var f: Fire = .{ .kind = kind, .base_x = x, .base_y = y, .frames = .init(time, 0.1) };
-        f.frames.i = rng.uintLessThan(u8, 4);
-        f.frames.interval = 0.15;
-        return f;
-    }
-
-    /// Fires on buildings are chosen at random: mostly flames.
-    pub fn random(x: i32, y: i32, rng: std.Random, time: f64) Fire {
-        const choice = rng.uintLessThan(u32, 100);
-        const kind: FireKind = if (choice < 10) .big_smoke else if (choice < 20) .small_fire_smoke else if (choice < 50) .fire else .little_fire;
-        return .init(kind, x, y, rng, time);
-    }
-
-    pub fn update(f: *Fire, time: f64) void {
-        if (f.frames.tick(time) and f.frames.i >= 4) f.frames.i = 0;
-    }
-
-    pub fn draw(f: *const Fire, cv: Canvas, s: *const Fx) void {
-        const imgs, const ox: i32, const oy: i32 = switch (f.kind) {
-            .big_smoke => .{ &s.big_smoke, 16, 32 },
-            .little_fire => .{ &s.little_fire, 4, 8 },
-            .small_fire_smoke => .{ &s.small_fire_smoke, 8, 16 },
-            .fire => .{ &s.fire, 4, 8 },
-        };
-        cv.draw(imgs[f.frames.i], f.base_x - ox, f.base_y - oy);
-    }
-
-    /// Fires further down the screen are drawn later.
-    pub fn lessThan(_: void, a: Fire, b: Fire) bool {
-        return a.base_y < b.base_y;
-    }
-};
 
 pub const TurretPiece = enum {
     light,
@@ -250,7 +63,7 @@ pub const TurretPiece = enum {
     fort4,
     grenade,
 
-    fn frames(p: TurretPiece) u8 {
+    pub fn frames(p: TurretPiece) u8 {
         return switch (p) {
             .light, .medium, .heavy => 8,
             .building0, .building1, .fort0, .fort1, .fort2, .fort3, .fort4 => 12,
@@ -259,7 +72,7 @@ pub const TurretPiece = enum {
         };
     }
 
-    fn image(p: TurretPiece, s: *const Fx, team: k.Team, i: u8) Image {
+    pub fn image(p: TurretPiece, s: *const Fx, team: k.Team, i: u8) Image {
         return switch (p) {
             .light => s.light_turret[i],
             .medium => s.medium_turret[i],
@@ -279,7 +92,7 @@ pub const TurretPiece = enum {
         };
     }
 
-    fn ofCannon(kind: k.Cannon) TurretPiece {
+    pub fn ofCannon(kind: k.Cannon) TurretPiece {
         return switch (kind) {
             .gatling => .gatling,
             .gun => .gun,
@@ -300,7 +113,7 @@ pub const RocketKind = enum {
     missile_cannon,
 };
 
-const Rocket = struct {
+pub const Rocket = struct {
     kind: RocketKind,
     /// Launcher to target; the rocket itself flies `offset` beside it.
     line: Line,
@@ -317,7 +130,7 @@ const Rocket = struct {
     const Blasts = struct { small: u8 = 0, large: u8 = 0, xx_large: u8 = 0 };
 };
 
-const Effect = union(enum) {
+pub const Effect = union(enum) {
     bullet: struct { team: k.Team, line: Line },
     /// Lasers and pyro flames.
     beam: struct { flame: bool, line: Line, img: usize, angle: f64 },
@@ -359,7 +172,7 @@ const Anim = struct {
     jitter: f64 = 0,
 };
 
-const Wreck = struct {
+pub const Wreck = struct {
     img: Image,
     x: i32,
     y: i32,
@@ -371,7 +184,7 @@ const Wreck = struct {
     gun: ?struct { piece: TurretPiece, to: Point, offset: f64 } = null,
 };
 
-const mushroom_shift = [12]f64{ 14, 9, 2, 0, 0, 0, 1, 2, 3, 4, 5, 6 };
+pub const mushroom_shift = [12]f64{ 14, 9, 2, 0, 0, 0, 1, 2, 3, 4, 5, 6 };
 
 /// What effects need to know about the game while updating.
 pub const Context = struct {
@@ -423,7 +236,10 @@ pub const Effects = struct {
         fx.sounds.append(fx.gpa, .{ .sound = e, .where = where }) catch {};
     }
 
-    fn soundAt(fx: *Effects, e: SoundEffect, x: i32, y: i32) void {
+    // The helpers and spawning functions below are also used by the files
+    // in effects/, which is why some are pub that only matter here.
+
+    pub fn soundAt(fx: *Effects, e: SoundEffect, x: i32, y: i32) void {
         fx.sound(e, .{ .x = x, .y = y, .w = 0, .h = 0 });
     }
 
@@ -439,22 +255,22 @@ pub const Effects = struct {
     }
 
     /// 0 to n - 1.
-    fn rand(fx: *Effects, n: i32) i32 {
+    pub fn rand(fx: *Effects, n: i32) i32 {
         return fx.rng.intRangeLessThan(i32, 0, n);
     }
 
     /// One of n things (an index).
-    fn pick(fx: *Effects, n: usize) usize {
+    pub fn pick(fx: *Effects, n: usize) usize {
         return fx.rng.uintLessThan(usize, n);
     }
 
     /// `min` plus up to `spread - 1` more.
-    fn count(fx: *Effects, min: usize, spread: usize) usize {
+    pub fn count(fx: *Effects, min: usize, spread: usize) usize {
         return min + fx.rng.uintLessThan(usize, spread);
     }
 
     /// `base + (spread - rand(2 * spread))`: a random offset within ±spread.
-    fn around(fx: *Effects, spread: i32) i32 {
+    pub fn around(fx: *Effects, spread: i32) i32 {
         return spread - fx.rand(2 * spread);
     }
 
@@ -463,7 +279,7 @@ pub const Effects = struct {
     }
 
     /// Wrecks and dying robots go under the other effects.
-    fn addUnder(fx: *Effects, e: Effect) void {
+    pub fn addUnder(fx: *Effects, e: Effect) void {
         fx.air.insert(fx.gpa, 0, e) catch {};
     }
 
@@ -546,7 +362,7 @@ pub const Effects = struct {
         fx.add(.{ .anim = a });
     }
 
-    fn mushroom(fx: *Effects, x: i32, y: i32, size: f64) void {
+    pub fn mushroom(fx: *Effects, x: i32, y: i32, size: f64) void {
         fx.anim(.{
             .imgs = &fx.s.mushroom,
             .x = x - int(16 * size),
@@ -557,11 +373,11 @@ pub const Effects = struct {
         });
     }
 
-    fn toughSmoke(fx: *Effects, x: i32, y: i32) void {
+    pub fn toughSmoke(fx: *Effects, x: i32, y: i32) void {
         fx.anim(.{ .imgs = &fx.s.tough_smoke, .x = x, .y = y, .centered = true, .frames = .init(fx.time, 0.12) });
     }
 
-    fn pyroFire(fx: *Effects, x: i32, y: i32) void {
+    pub fn pyroFire(fx: *Effects, x: i32, y: i32) void {
         const kind: usize = fx.pick(5);
         const n: usize = if (kind < 3) 4 else 6;
         const first = fx.s.pyro_fire[kind][0];
@@ -601,7 +417,7 @@ pub const Effects = struct {
         fx.add(.{ .spark = .{ .arc = .init(.of(x - 8, y - 5), to, lifetime, rise, fx.time), .frames = .init(fx.time, 0.1) } });
     }
 
-    fn sparks(fx: *Effects, x: i32, y: i32, min: u32, spread: u32) void {
+    pub fn sparks(fx: *Effects, x: i32, y: i32, min: u32, spread: u32) void {
         const n = min + fx.rng.uintLessThan(u32, spread);
         for (0..n) |_| fx.spark(x, y);
     }
@@ -618,7 +434,7 @@ pub const Effects = struct {
         fx.add(.{ .robot_flip = .{ .team = team, .arc = .init(.of(x, y), to, lifetime, rise, fx.time), .frames = .init(fx.time, 0.05) } });
     }
 
-    fn rockParticle(fx: *Effects, x0: i32, y0: i32, mid: bool, horz: i32, vert: i32) void {
+    pub fn rockParticle(fx: *Effects, x0: i32, y0: i32, mid: bool, horz: i32, vert: i32) void {
         const p = @intFromEnum(fx.planet);
         const imgs: []const Image = if (!mid) &fx.s.rock_small[p] else &fx.s.rock_mid[fx.pick(2)][p];
         const lifetime = 1.1 + 0.1 * @as(f64, @floatFromInt(fx.rand(10)));
@@ -629,7 +445,7 @@ pub const Effects = struct {
         fx.add(.{ .rock_particle = .{ .arc = .init(.of(x - 8, y - 5), to, lifetime, rise, fx.time), .frames = .init(fx.time, 0.07), .imgs = imgs } });
     }
 
-    fn rockChunk(fx: *Effects, x0: i32, y0: i32, bridge: bool, reversed: bool) void {
+    pub fn rockChunk(fx: *Effects, x0: i32, y0: i32, bridge: bool, reversed: bool) void {
         const p = @intFromEnum(fx.planet);
         const imgs = if (bridge)
             &fx.s.bridge_debris[p]
@@ -666,7 +482,7 @@ pub const Effects = struct {
         fx.add(.{ .turret = .{ .piece = piece, .team = team, .arc = arc, .frames = .init(fx.time, 0.1), .spin = @floatFromInt(240 - fx.rand(480)) } });
     }
 
-    fn mapObjectPiece(fx: *Effects, index: u8, from_x: i32, from_y: i32, to_x: i32, to_y: i32, offset: f64) void {
+    pub fn mapObjectPiece(fx: *Effects, index: u8, from_x: i32, from_y: i32, to_x: i32, to_y: i32, offset: f64) void {
         const i = @min(index, sprites.map_objects - 1);
         const rise = 0.5 + 0.01 * @as(f64, @floatFromInt(fx.rand(100)));
         const my: i32 = 16 - fx.s.map_object[i].height();
@@ -678,7 +494,7 @@ pub const Effects = struct {
 
     const WreckKind = enum { jeep, launcher, apc, crane, tank };
 
-    fn wreck(fx: *Effects, kind: WreckKind, img: Image, x: i32, y: i32) void {
+    pub fn wreck(fx: *Effects, kind: WreckKind, img: Image, x: i32, y: i32) void {
         var w: Wreck = .{ .img = img, .x = x, .y = y, .until = fx.time + 5 + @as(f64, @floatFromInt(fx.rand(3))) };
         // Where fires burn on the wreck.
         const bx: i32, const by: i32, const bw: i32, const bh: i32 = switch (kind) {
@@ -836,508 +652,20 @@ pub const Effects = struct {
         } });
     }
 
-    // -----------------------------------------------------------------------
-    // Units firing and dying
-    // -----------------------------------------------------------------------
+    // Units firing and dying (effects/deaths.zig)
+    pub const pointOn = deaths.pointOn;
+    pub const fireMissile = deaths.fireMissile;
+    pub const robotMuzzle = deaths.robotMuzzle;
+    pub const destroyed = deaths.destroyed;
+    pub const bridgeDebris = deaths.bridgeDebris;
+    pub const unitParticles = deaths.unitParticles;
 
-    /// A random point on `target` (where a bullet hits).
-    pub fn pointOn(fx: *Effects, target: *const Object) [2]i32 {
-        return .{ target.x + fx.rand(@max(target.width_pix, 1)), target.y + fx.rand(@max(target.height_pix, 1)) };
-    }
+    // Updating (effects/update.zig)
+    pub const update = update_mod.update;
 
-    /// The server says `o` fired at (x, y) (FireMissile of each unit).
-    pub fn fireMissile(fx: *Effects, o: *const Object, x: i32, y: i32, direction: u3, turret_direction: u3, target: ?*const Object, tough_rocket: bool) void {
-        // Muzzles of cannons and tanks, per direction.
-        const mx = [8]i32{ 20, 12, 0, -12, -20, -12, 0, 12 };
-        const my = [8]i32{ 0, -12, -20, -12, 0, 12, 20, 12 };
-        switch (o.kind) {
-            .cannon => |cn| {
-                const sx = o.x + 17 + mx[direction];
-                const sy = o.y + 14 + my[direction];
-                switch (cn.type) {
-                    .gun => fx.rocket(.light, sx, sy, x, y, .{ .speed = o.missile_speed, .large = 1 }),
-                    .howitzer => fx.rocket(.light, sx, sy, x, y, .{ .speed = o.missile_speed, .small = 1, .large = 1 }),
-                    .missile_cannon => fx.rocket(.missile_cannon, sx, sy, x, y, .{ .speed = o.missile_speed, .particle_radius = o.damage_radius }),
-                    .gatling => {},
-                }
-                fx.soundOf(switch (cn.type) {
-                    .gun => .gun_fire,
-                    .howitzer => .heavy_fire,
-                    .missile_cannon => .missile_fire,
-                    .gatling => .gatling_fire,
-                }, o);
-            },
-            .vehicle => |veh| {
-                const sx = o.x + 17 + mx[turret_direction];
-                const sy = o.y + 14 + my[turret_direction];
-                switch (veh.type) {
-                    .light => fx.rocket(.light, sx, sy, x, y, .{ .speed = o.missile_speed }),
-                    .medium => fx.rocket(.light, sx, sy, x, y, .{ .speed = o.missile_speed, .large = 1 }),
-                    .heavy => fx.rocket(.light, sx, sy, x, y, .{ .speed = o.missile_speed, .large = 1, .xx_large = 1 }),
-                    .missile_launcher => fx.rocket(.launcher, sx, sy, x, y, .{ .speed = o.missile_speed, .particle_radius = o.damage_radius }),
-                    .apc => if (target) |tg| {
-                        fx.soundOf(.tough_fire, o);
-                        // One rocket for each tough inside.
-                        fx.rocket(.tough, o.x + 16, o.y + 16, x, y, .{ .speed = o.missile_speed });
-                        for (1..o.drivers.items.len) |_| {
-                            const p = fx.pointOn(tg);
-                            fx.rocket(.tough, o.x + 16, o.y + 16, p[0], p[1], .{ .speed = o.missile_speed });
-                        }
-                    },
-                    else => {},
-                }
-                switch (veh.type) {
-                    .light => fx.soundOf(.light_fire, o),
-                    .medium => fx.soundOf(.medium_fire, o),
-                    .heavy => fx.soundOf(.heavy_fire, o),
-                    .missile_launcher => fx.soundOf(.missile_fire, o),
-                    else => {},
-                }
-            },
-            .robot => if (tough_rocket) {
-                if (target != null) {
-                    const d = robotMuzzle(direction);
-                    fx.rocket(.tough, o.x + 8 + d[0], o.y + 8 + d[1], x, y, .{ .speed = o.missile_speed });
-                    fx.soundOf(.tough_fire, o);
-                }
-            } else {
-                // A grenade.
-                const dx: f64 = @floatFromInt(o.center_x - x);
-                const dy: f64 = @floatFromInt(o.center_y - y);
-                const speed: f64 = @floatFromInt(@max(fx.grenade_speed, 1));
-                fx.turret(.grenade, .none, o.center_x + 2, o.center_y + 2, x, y, @sqrt(dx * dx + dy * dy) / speed);
-                fx.soundOf(.throw_grenade, o);
-            },
-            else => {},
-        }
-    }
-
-    /// Where a robot's gun is, per direction.
-    pub fn robotMuzzle(direction: u3) [2]i32 {
-        const t = [8][2]i32{ .{ 8, 0 }, .{ 8, -8 }, .{ 0, -8 }, .{ -8, -8 }, .{ -8, 0 }, .{ -8, 8 }, .{ 0, 8 }, .{ 8, 8 } };
-        return t[direction];
-    }
-
-    /// How a unit looked when it died (tanks leave that picture).
-    pub const Look = struct { direction: u3 = 0, move_i: u8 = 0 };
-
-    /// `o` was destroyed (DoDeathEffect + FireTurrentMissile).
-    pub fn destroyed(fx: *Effects, o: *const Object, look: Look, fire_death: bool, missile_death: bool, missiles: []const protocol.FireMissileInfo, all_sprites: *const sprites.Sprites) void {
-        switch (o.kind) {
-            .robot => if (missile_death)
-                fx.robotFlip(o.owner, o.center_x, o.center_y)
-            else if (o.owner != .none) {
-                const team = @intFromEnum(o.owner);
-                const imgs: []const Image = if (fire_death) &fx.s.robot_melt[team] else blk: {
-                    const d: usize = fx.pick(4);
-                    break :blk fx.s.robot_die[d][team][0..if (d == 3) 8 else 10];
-                };
-                fx.addUnder(.{ .anim = .{ .imgs = imgs, .x = o.x, .y = o.y, .frames = .init(fx.time, 0.16) } });
-            },
-            .vehicle => |veh| switch (veh.type) {
-                .jeep => fx.wreck(.jeep, fx.s.jeep_wasted, o.x, o.y),
-                .missile_launcher => fx.wreck(.launcher, fx.s.missile_launcher_wasted, o.x, o.y),
-                .apc => fx.wreck(.apc, fx.s.apc_wasted, o.x, o.y),
-                .crane => fx.wreck(.crane, fx.s.crane_wasted, o.x, o.y),
-                .light, .medium, .heavy => {
-                    const img = all_sprites.vehicle[@intFromEnum(veh.type)].damaged[@intFromEnum(o.owner)][look.direction][@min(look.move_i, 2)];
-                    fx.wreck(.tank, img, o.x, o.y);
-                },
-            },
-            .building => |b| switch (b.type) {
-                .bridge_vert, .bridge_horz => fx.bridgeDebris(o, false),
-                else => fx.buildingExplosion(o, b.type),
-            },
-            .item => |it| switch (it) {
-                .rock => {
-                    for (0..fx.count(12, 6)) |_| fx.rockParticle(o.x, o.y, false, 80, 60);
-                    for (0..fx.count(4, 3)) |_| fx.rockParticle(o.x, o.y, true, 40, 40);
-                    for (0..fx.count(0, 2)) |_| fx.rockChunk(o.x, o.y, false, false);
-                },
-                else => if (it.mapObjectIndex() != null) {
-                    for (0..fx.count(10, 8)) |_| fx.particle(o.x, o.y, 65, 55);
-                    fx.sparks(o.x + 16, o.y + 16, 20, 20);
-                },
-            },
-            else => {},
-        }
-
-        for (missiles) |m| switch (o.kind) {
-            .cannon => |cn| {
-                // The wreck smoulders for 2-4 s, then its gun flies off.
-                const burn: f64 = @floatFromInt(2 + fx.rand(3));
-                var w: Wreck = .{ .img = fx.s.cannon_wasted[@intFromEnum(TurretPiece.ofCannon(cn.type)) - @intFromEnum(TurretPiece.gatling)], .x = o.x, .y = o.y, .until = fx.time + burn };
-                w.gun = .{ .piece = .ofCannon(cn.type), .to = .of(m.x, m.y), .offset = m.offset_time - burn };
-                fx.addUnder(.{ .wreck = w });
-            },
-            .vehicle => |veh| switch (veh.type) {
-                .light => fx.turret(.light, o.owner, o.x + 8, o.y + 8, m.x, m.y, m.offset_time),
-                .medium => fx.turret(.medium, o.owner, o.x + 8, o.y + 8, m.x, m.y, m.offset_time),
-                .heavy => fx.turret(.heavy, o.owner, o.x + 8, o.y + 8, m.x, m.y, m.offset_time),
-                else => {},
-            },
-            .item => |it| if (it == .grenades) {
-                fx.turret(.grenade, .none, o.x + 2, o.y + 2, m.x, m.y, m.offset_time);
-            } else if (it.mapObjectIndex()) |i| {
-                fx.mapObjectPiece(i, o.x, o.y, m.x, m.y, m.offset_time);
-            },
-            else => {},
-        };
-    }
-
-    /// A bridge falls apart, or (`reversed`) its pieces fly back together.
-    pub fn bridgeDebris(fx: *Effects, o: *const Object, reversed: bool) void {
-        if (o.kind.building.type == .bridge_vert) {
-            const x = o.x + 16;
-            var y = o.y + 16 + 5 + fx.rand(10);
-            while (y < o.y + o.height_pix - 16) : (y += 5 + fx.rand(10)) fx.rockChunk(x + fx.rand(32), y, true, reversed);
-        } else {
-            var x = o.x + 16 + 5 + fx.rand(10);
-            const y = o.y + 16;
-            while (x < o.x + o.width_pix - 16) : (x += 5 + fx.rand(10)) fx.rockChunk(x, y + fx.rand(32), true, reversed);
-        }
-    }
-
-    fn buildingExplosion(fx: *Effects, o: *const Object, kind: k.Building) void {
-        const box = effectsBox(o);
-        fx.soundOf(.explosion, o);
-        // Fireballs, then pieces: counts and flight times per building.
-        const balls: u32, const balls_spread: u32, const pieces: u32, const pieces_spread: u32, const flight: f64 = switch (kind) {
-            .fort_front, .fort_back => .{ 12, 6, 16, 6, 3 },
-            .radar => .{ 4, 3, 3, 3, 1.5 },
-            .repair => .{ 6, 3, 4, 3, 1.5 },
-            else => .{ 8, 3, 6, 3, 1.5 },
-        };
-        const is_fort = kind == .fort_front or kind == .fort_back;
-        for (0..balls + fx.rng.uintLessThan(u32, balls_spread)) |_| {
-            fx.sideExplosion(o.x + box.x + fx.rand(box.w), o.y + box.y + fx.rand(box.h), 1.3);
-        }
-        for (0..pieces + fx.rng.uintLessThan(u32, pieces_spread)) |_| {
-            const sx = o.x + box.x + fx.rand(box.w);
-            const sy = o.y + box.y + fx.rand(box.h);
-            const ex = o.x + (o.width_pix >> 1) + fx.around(200);
-            const ey = o.y + (o.height_pix >> 1) + fx.around(200);
-            const offset = flight + 0.01 * @as(f64, @floatFromInt(fx.rand(200)));
-            const piece: TurretPiece = if (is_fort)
-                @enumFromInt(@intFromEnum(TurretPiece.fort0) + @as(u8, @intCast(fx.pick(5))))
-            else if (fx.rand(2) == 0) .building0 else .building1;
-            fx.turret(piece, .none, sx, sy, ex, ey, offset);
-        }
-    }
-
-    /// Units near a blast throw off particles (ZPlayer::MissileObjectParticles).
-    fn unitParticles(fx: *Effects, world: *const World, x: i32, y: i32, radius0: i32, amount: u32) void {
-        const radius = @divTrunc(radius0 * 8, 10);
-        for (world.objects.items) |o| {
-            switch (o.kind) {
-                .cannon, .vehicle, .robot => {},
-                else => continue,
-            }
-            if (o.x > x + radius or o.x + o.width_pix < x - radius) continue;
-            if (o.y > y + radius or o.y + o.height_pix < y - radius) continue;
-            var n = 14 + fx.rng.uintLessThan(u32, @max(amount, 1));
-            if (o.kind == .robot) n /= 2;
-            for (0..n) |_| fx.particle(o.x + fx.rand(@max(o.width_pix, 1)), o.y + fx.rand(@max(o.height_pix, 1)), 25, 25);
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Updating
-    // -----------------------------------------------------------------------
-
-    pub fn update(fx: *Effects, ctx: Context) void {
-        fx.time = ctx.time;
-        fx.grenade_speed = ctx.world.settings.grenade_missile_speed;
-        if (ctx.world.map) |m| fx.planet = m.planet();
-        inline for (.{ &fx.ground, &fx.air }) |list| {
-            var i: usize = 0;
-            while (i < list.items.len) {
-                if (fx.step(&list.items[i], ctx)) {
-                    i += 1;
-                } else {
-                    _ = list.orderedRemove(i);
-                }
-            }
-        }
-        fx.air.appendSlice(fx.gpa, fx.spawned.items) catch {};
-        fx.spawned.clearRetainingCapacity();
-    }
-
-    /// Advance one effect; false when it is over.
-    fn step(fx: *Effects, e: *Effect, ctx: Context) bool {
-        const t = ctx.time;
-        switch (e.*) {
-            .bullet => |b| if (t >= b.line.t1) {
-                for (0..fx.count(0, 3)) |_| fx.particle(int(b.line.end.x), int(b.line.end.y), 25, 25);
-                fx.soundAt(.ricochet, int(b.line.end.x), int(b.line.end.y));
-                return false;
-            },
-            .beam => |*b| if (t >= b.line.t1) {
-                if (b.flame) fx.pyroFire(int(b.line.end.x), int(b.line.end.y));
-                return false;
-            },
-            .rocket => |*r| return fx.stepRocket(r, ctx),
-            .anim => |*a| {
-                if (a.frames.tick(t)) {
-                    if (a.jitter > 0) a.frames.next = t + a.frames.interval + 0.1 * @as(f64, @floatFromInt(fx.rand(10)));
-                    a.shown += 1;
-                    if (a.loops > 0) {
-                        if (a.frames.i >= a.imgs.len) a.frames.i = 0;
-                        if (a.shown >= a.loops) return false;
-                    } else if (a.frames.i >= a.imgs.len) return false;
-                }
-            },
-            .side_explosion => |*s| if (s.frames.tick(t) and s.frames.i >= 7) return false,
-            .particle => |*p| {
-                if (p.arc.done(t)) return false;
-                if (p.frames.tick(t) and p.frames.i >= 20) p.frames.i = 0;
-            },
-            .spark => |*p| {
-                if (p.arc.done(t)) return false;
-                if (p.frames.tick(t) and p.frames.i >= 6) p.frames.i = 0;
-            },
-            .robot_flip => |*p| {
-                if (t >= p.frames.next) {
-                    // Tumbles through the air, then lies and gets up.
-                    p.frames.i += 1;
-                    if (t < p.arc.line.t1) {
-                        p.frames.next = t + 0.05;
-                        if (p.frames.i > 7) p.frames.i = 0;
-                    } else {
-                        p.frames.next = t + 0.15;
-                        if (p.frames.i < 8) p.frames.i = 8;
-                    }
-                    if (p.frames.i > 32) return false;
-                }
-            },
-            .rock_particle => |*p| {
-                if (p.arc.done(t)) return false;
-                if (p.frames.tick(t) and p.frames.i >= 6) p.frames.i = 0;
-            },
-            .rock_chunk => |*p| {
-                if (p.arc.done(t)) {
-                    if (!p.reversed) {
-                        const at = p.arc.line.at(t);
-                        for (0..fx.count(12, 6)) |_| fx.rockParticle(int(at.x), int(at.y - (p.arc.lift(t)) * 30), false, 80, 60);
-                    }
-                    return false;
-                }
-                if (p.frames.tick(t) and p.frames.i >= 12) p.frames.i = 0;
-            },
-            .turret => |*p| {
-                if (p.arc.done(t)) {
-                    const at = p.arc.line.at(t);
-                    const ex = int(p.arc.line.end.x);
-                    const ey = int(p.arc.line.end.y);
-                    fx.mushroom(ex + 7 - fx.rand(14), ey - fx.rand(14), 1.3);
-                    fx.sideExplosion(ex + fx.around(24), ey + fx.around(24), 1.0);
-                    const lift = p.arc.lift(t) + 1;
-                    fx.sparks(int(at.x) + 16, int(at.y - lift * 30 + 30) + 16, 30, 30);
-                    if (ctx.terrain) |tr| tr.crater(fx.rng, ex, ey, false, 0.35);
-                    fx.soundAt(.turret_explosion, ex, ey);
-                    return false;
-                }
-                if (p.frames.tick(t) and p.frames.i >= p.piece.frames()) p.frames.i = 0;
-            },
-            .map_object => |*p| if (p.arc.done(t)) {
-                const dx = int(p.dest.x);
-                const dy = int(p.dest.y);
-                fx.mushroom(dx, dy, 1.0);
-                for (0..fx.count(10, 8)) |_| fx.particle(dx, dy, 65, 55);
-                fx.soundAt(.turret_explosion, int(p.arc.line.end.x), int(p.arc.line.end.y));
-                return false;
-            },
-            .wreck => |*w| {
-                if (t >= w.until) {
-                    if (w.gun) |g| {
-                        fx.sparks(w.x + 16, w.y + 16, 20, 15);
-                        fx.turret(g.piece, .none, w.x, w.y, int(g.to.x), int(g.to.y), g.offset);
-                    } else fx.sparks(w.x + 16, w.y + 16, 40, 30);
-                    return false;
-                }
-                for (w.fires[0..w.fire_n]) |*f| f.update(t);
-            },
-            .track => |*tr| {
-                const d = t - tr.start;
-                if (d >= 3.9) return false;
-                tr.i = if (d >= 3.6) 2 else if (d >= 3.3) 1 else 0;
-            },
-        }
-        return true;
-    }
-
-    fn stepRocket(fx: *Effects, r: *Rocket, ctx: Context) bool {
-        const t = ctx.time;
-        if (t < r.line.t1) {
-            // Smoke trails.
-            if (r.kind == .light) return true;
-            const speed = @sqrt(r.line.vx * r.line.vx + r.line.vy * r.line.vy);
-            const back = 6.0 / @max(speed, 1);
-            const every = 8.0 / @max(speed, 1);
-            while (t - r.last_smoke > every) : (r.last_smoke += every) {
-                const at = r.line.at(r.last_smoke - back);
-                const x = at.x + r.offset.x;
-                const y = at.y + r.offset.y;
-                fx.toughSmoke(int(x), int(y));
-                if (r.kind != .tough) fx.toughSmoke(int(x + r.side.x), int(y + r.side.y));
-                if (r.kind == .launcher) fx.toughSmoke(int(x - r.side.x), int(y - r.side.y));
-            }
-            return true;
-        }
-        const ex = int(r.line.end.x);
-        const ey = int(r.line.end.y);
-        fx.soundAt(.explosion, ex, ey);
-        switch (r.kind) {
-            .light => {
-                const e = r.extra;
-                for (0..e.xx_large) |_| fx.mushroom(ex + 9 - fx.rand(18), ey - fx.rand(18), 1.5);
-                for (0..e.large) |_| fx.mushroom(ex + 7 - fx.rand(14), ey - fx.rand(14), 1.3);
-                for (0..e.small) |_| fx.mushroom(ex + 5 - fx.rand(10), ey - fx.rand(10), 1.0);
-                fx.mushroom(ex, ey, 1.0);
-                fx.unitParticles(ctx.world, ex, ey, 40, 7 + @as(u32, e.small) * 2 + @as(u32, e.large) * 3 + @as(u32, e.xx_large) * 4);
-                if (ctx.terrain) |tr| {
-                    const chance = fx.rng.float(f64);
-                    const big = (e.xx_large > 0 and chance <= 0.35) or (e.large > 0 and chance <= 0.15);
-                    tr.crater(fx.rng, ex, ey, big, 0.75);
-                }
-            },
-            .tough => {
-                fx.mushroom(ex, ey, 1.0);
-                if (ctx.terrain) |tr| tr.crater(fx.rng, ex, ey, false, 0.35);
-            },
-            .launcher => {
-                for (0..3) |_| fx.mushroom(ex + 9 - fx.rand(18), ey - fx.rand(18), 1.5);
-                for (0..2) |_| fx.mushroom(ex + 5 - fx.rand(10), ey - fx.rand(10), 1.0);
-                fx.mushroom(ex, ey, 1.0);
-                fx.unitParticles(ctx.world, ex, ey, r.particle_radius, 7 + 2 * 2 + 3 * 4);
-                if (ctx.terrain) |tr| tr.crater(fx.rng, ex, ey, true, 0.75);
-            },
-            .missile_cannon => {
-                for (0..3) |_| fx.mushroom(ex + 7 - fx.rand(14), ey - fx.rand(14), 1.3);
-                fx.mushroom(ex + 5 - fx.rand(10), ey - fx.rand(10), 1.0);
-                fx.mushroom(ex, ey, 1.0);
-                fx.unitParticles(ctx.world, ex, ey, r.particle_radius, 7 + 1 * 2 + 3 * 3);
-                if (ctx.terrain) |tr| tr.crater(fx.rng, ex, ey, false, 1.0);
-            },
-        }
-        return false;
-    }
-
-    // -----------------------------------------------------------------------
-    // Drawing
-    // -----------------------------------------------------------------------
-
-    /// Draw `img` turned and scaled, from its corner or centered on (x, y).
-    fn put(fx: *Effects, cv: Canvas, view: gfx.Rect, img: Image, x: i32, y: i32, angle: f64, size: f64, centered: bool) void {
-        const i = img;
-        // Skip what is well off screen before transforming.
-        const margin = 2 * @max(i.width(), i.height()) + 32;
-        if (x < view.x - margin or y < view.y - margin or x > view.x + view.w + margin or y > view.y + view.h + margin) return;
-        const out = fx.transforms.get(i, angle, size) orelse return;
-        if (centered) cv.drawCentered(out, x, y) else cv.draw(out, x, y);
-    }
-
-    /// Tracks, dust and oil: under the objects.
-    pub fn drawGround(fx: *Effects, cv: Canvas, view: gfx.Rect) void {
-        for (fx.ground.items) |*e| fx.drawOne(e, cv, view);
-    }
-
-    /// Everything else: over the objects.
-    pub fn draw(fx: *Effects, cv: Canvas, view: gfx.Rect) void {
-        for (fx.air.items) |*e| fx.drawOne(e, cv, view);
-        fx.transforms.endFrame();
-    }
-
-    fn drawOne(fx: *Effects, e: *Effect, cv: Canvas, view: gfx.Rect) void {
-        const s = fx.s;
-        const t = fx.time;
-        switch (e.*) {
-            .bullet => |b| {
-                const at = b.line.at(t);
-                const col = fx.palettes.color(b.team);
-                cv.fill(.{ .x = int(at.x), .y = int(at.y), .w = 2, .h = 2 }, col);
-            },
-            .beam => |*b| {
-                const at = b.line.at(t);
-                const img = if (b.flame) s.flame_bullet[b.img] else s.laser_bullet[b.img];
-                fx.put(cv, view, img, int(at.x), int(at.y), b.angle, 1, false);
-                // Flames flicker.
-                if (b.flame) b.img = fx.pick(4);
-            },
-            .rocket => |r| {
-                var at = r.line.at(t);
-                at.x += r.offset.x;
-                at.y += r.offset.y;
-                const x = int(at.x);
-                const y = int(at.y);
-                switch (r.kind) {
-                    .light => fx.put(cv, view, s.light_bullet, x, y, r.angle, 1, false),
-                    .tough => fx.put(cv, view, s.tough_bullet[0], x, y, r.angle, 1, true),
-                    .launcher => {
-                        fx.put(cv, view, s.mo_bullet, x, y, r.angle, 1, true);
-                        fx.put(cv, view, s.mo_bullet, int(at.x + r.side.x), int(at.y + r.side.y), r.angle, 1, true);
-                        fx.put(cv, view, s.mo_bullet, int(at.x - r.side.x), int(at.y - r.side.y), r.angle, 1, true);
-                    },
-                    .missile_cannon => {
-                        fx.put(cv, view, s.mc_bullet, x, y, r.angle, 1, true);
-                        fx.put(cv, view, s.mc_bullet, int(at.x + r.side.x), int(at.y + r.side.y), r.angle, 1, true);
-                    },
-                }
-            },
-            .anim => |a| {
-                const img = if (a.frames.i < a.first.len) a.first[a.frames.i] else a.imgs[@min(a.frames.i, a.imgs.len - 1)];
-                const y = if (a.mushroom) a.y + int(mushroom_shift[@min(a.frames.i, 11)] * a.size) else a.y;
-                fx.put(cv, view, img, a.x, y, 0, a.size, a.centered);
-            },
-            .side_explosion => |x| {
-                const at = x.line.at(t);
-                fx.put(cv, view, s.side_explosion[@min(x.frames.i, 6)], int(at.x), int(at.y), 0, x.size, false);
-            },
-            .particle => |p| {
-                const at = p.arc.line.at(t);
-                fx.put(cv, view, s.unit_particle[p.frames.i], int(at.x), int(at.y - p.arc.lift(t) * 65), 0, 1, false);
-            },
-            .spark => |p| {
-                const at = p.arc.line.at(t);
-                const lift = p.arc.lift(t);
-                fx.put(cv, view, s.spark[p.frames.i], int(at.x), int(at.y - lift * 30), 0, lift, true);
-            },
-            .robot_flip => |p| {
-                const in_air = t < p.arc.line.t1;
-                const at = p.arc.line.at(@min(t, p.arc.line.t1));
-                const lift = if (in_air) p.arc.lift(t) else 0;
-                fx.put(cv, view, s.robot_flip[@intFromEnum(p.team)][p.frames.i], int(at.x), int(at.y - lift * 30), 0, 1 + lift, true);
-            },
-            .rock_particle => |p| {
-                const at = p.arc.line.at(t);
-                const lift = p.arc.lift(t);
-                fx.put(cv, view, p.imgs[p.frames.i % p.imgs.len], int(at.x), int(at.y - lift * 150), 0, 1 + lift, true);
-            },
-            .rock_chunk => |p| {
-                const at = p.arc.line.at(t);
-                const lift = p.arc.lift(t);
-                fx.put(cv, view, p.imgs[p.frames.i], int(at.x), int(at.y - lift * 30), @mod(p.spin * (t - p.arc.line.t0), 360), 1 + lift, true);
-            },
-            .turret => |p| {
-                const at = p.arc.line.at(t);
-                const size = p.arc.lift(t) + 1;
-                const img = p.piece.image(s, p.team, p.frames.i);
-                fx.put(cv, view, img, int(at.x), int(at.y - size * 30 + 30), @mod(p.spin * (t - p.arc.line.t0), 360), size, true);
-            },
-            .map_object => |p| {
-                const at = p.arc.line.at(t);
-                const lift = p.arc.lift(t);
-                fx.put(cv, view, s.map_object[p.index], int(at.x), int(at.y - lift * 30), @mod(p.spin * (t - p.arc.line.t0), 360), lift + 1, true);
-            },
-            .wreck => |*w| {
-                cv.draw(w.img, w.x, w.y);
-                for (w.fires[0..w.fire_n]) |*f| f.draw(cv, s);
-            },
-            .track => |tr| for (tr.pos, tr.lay) |p, lay| {
-                if (lay) fx.put(cv, view, tr.imgs[tr.i], p[0], p[1], 0, 1, true);
-            },
-        }
-    }
+    // Drawing (effects/draw.zig)
+    pub const drawGround = draw_mod.drawGround;
+    pub const draw = draw_mod.draw;
 };
 
 /// Where a vehicle's two tracks touch the ground, per direction
@@ -1360,62 +688,6 @@ pub fn trackCoords(cx: i32, cy: i32, direction: u3, rng: std.Random) [2][2]i32 {
         pt[1] += jy;
     }
     return p;
-}
-
-/// Damage fires and smoke on a building (ZBuilding::ProcessBuildingsEffects):
-/// more of them the more it is damaged.
-pub const BuildingFires = struct {
-    fires: std.ArrayList(Fire) = .empty,
-    max: u32,
-
-    pub fn init(o: *const Object, rng: std.Random) BuildingFires {
-        const b = o.kind.building;
-        const max: u32 = switch (b.type) {
-            .fort_front, .fort_back => 20 + rng.uintLessThan(u32, 8),
-            .radar => 6 + rng.uintLessThan(u32, 3),
-            .repair => 6 + rng.uintLessThan(u32, 4),
-            .robot_factory, .vehicle_factory => 8 + rng.uintLessThan(u32, 4),
-            .bridge_vert, .bridge_horz => 0,
-        };
-        return .{ .max = max };
-    }
-
-    pub fn deinit(f: *BuildingFires, gpa: std.mem.Allocator) void {
-        f.fires.deinit(gpa);
-    }
-
-    /// Put out all fires (the building was rebuilt).
-    pub fn clear(f: *BuildingFires) void {
-        f.fires.clearRetainingCapacity();
-    }
-
-    pub fn update(f: *BuildingFires, gpa: std.mem.Allocator, o: *const Object, rng: std.Random, time: f64) void {
-        for (f.fires.items) |*fire| fire.update(time);
-        const ratio = std.math.clamp(@as(f64, @floatFromInt(o.health)) / @as(f64, @floatFromInt(@max(o.max_health, 1))), 0, 1);
-        const wanted: usize = @intFromFloat(@as(f64, @floatFromInt(f.max)) * (1 - ratio));
-        if (f.fires.items.len >= wanted) return;
-        const box = effectsBox(o);
-        while (f.fires.items.len < wanted) {
-            const x = o.x + box.x + rng.intRangeLessThan(i32, 0, box.w);
-            const y = o.y + box.y + rng.intRangeLessThan(i32, 0, box.h);
-            f.fires.append(gpa, .random(x, y, rng, time)) catch return;
-        }
-        std.mem.sort(Fire, f.fires.items, {}, Fire.lessThan);
-    }
-
-    pub fn draw(f: *const BuildingFires, cv: Canvas, s: *const sprites.Sprites) void {
-        for (f.fires.items) |*fire| fire.draw(cv, &s.fx);
-    }
-};
-
-/// The part of a building where fires burn and explosions happen.
-fn effectsBox(o: *const Object) gfx.Rect {
-    return switch (o.kind.building.type) {
-        .fort_front, .fort_back => .{ .x = 18, .y = 18, .w = 136, .h = 118 },
-        .radar => .{ .x = 1, .y = 6, .w = 44, .h = 30 },
-        .repair, .robot_factory, .vehicle_factory => .{ .x = 8, .y = 8, .w = @max(o.width_pix - 24, 1), .h = @max(o.height_pix - 24, 1) },
-        .bridge_vert, .bridge_horz => .{ .x = 16, .y = 16, .w = 32, .h = 32 },
-    };
 }
 
 test "effects run their course" {

@@ -38,8 +38,9 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       game/buildlist.zig  what each factory can build per level
       game/object.zig     the object model: one struct, a tagged union for
                           per-kind data, references by ref id
-      game/world.zig      objects, map, zones, missiles and the rules tying
-                          them together; queues messages for clients
+      game/world.zig      objects, map, zones and the rules tying them
+                          together; its parts in game/world/: damage,
+                          missiles, production, relay (messages for clients)
       game/sim.zig        the simulation step (orders, movement, combat,
                           production) and validation of players' orders
       game/unit_rating.zig  which units beat which
@@ -64,7 +65,9 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/sprites.zig  all object and effect images
       client/objects.zig  object animations and drawing (buildings, items)
       client/units.zig    cannon, vehicle and robot animations
-      client/effects.zig  shots, explosions, debris, wrecks, fires, tracks
+      client/effects.zig  shots, explosions, debris, wrecks, fires, tracks;
+                          its parts in client/effects/: motion, transforms
+                          (rotated images), fires, deaths, update, draw
       client/font.zig     bitmap fonts
       client/hud.zig      side panel, bottom bar, buttons, minimap
       client/cursor.zig   mouse cursors
