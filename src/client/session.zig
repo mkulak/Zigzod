@@ -59,8 +59,6 @@ pub const Event = union(enum) {
     pickup_grenades: i32,
     team_ended: protocol.TeamEnded,
     version: []u8,
-    buy_regkey,
-    regkey: [16]u8,
 
     fn deinit(e: Event, gpa: std.mem.Allocator) void {
         switch (e) {
@@ -406,10 +404,10 @@ pub const Session = struct {
                     },
                 }
             },
-            .set_lplayer_loginfo => {
-                const v = protocol.decode(protocol.SetPlayerLogInfo, data) orelse return;
+            .set_lplayer_bot => {
+                const v = protocol.decode(protocol.SetPlayerBot, data) orelse return;
                 const p = s.player(v.p_id) orelse return;
-                p.bot = v.bot_logged_in;
+                p.bot = v.bot;
             },
             .give_player_id => if (protocol.decode(protocol.PlayerId, data)) |v| {
                 s.id = v.p_id;
@@ -442,8 +440,6 @@ pub const Session = struct {
                 try s.server_version.appendSlice(s.gpa, protocol.decodeString(&v.version));
                 try s.emit(.{ .version = try s.gpa.dupe(u8, s.server_version.items) });
             },
-            .poll_buy_regkey => try s.emit(.buy_regkey),
-            .return_regkey => if (protocol.decode(protocol.BuyRegistration, data)) |v| try s.emit(.{ .regkey = v.buf }),
             else => {},
         }
     }

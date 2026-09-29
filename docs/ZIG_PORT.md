@@ -177,3 +177,7 @@ copying them (each one is noted in the commit that fixes it), e.g.:
   started each piece with its corner there, so they jumped when packing
   up); hut animals keep within their roaming distance even where the map's
   passability is unknown, and don't appear in the map editor.
+* there is no registration: the C++ client refused to move some units
+  without a registration key file tied to the computer's network card
+  (never ported); the user account and key buying commands and messages
+  are gone too (their message numbers are kept, unused).

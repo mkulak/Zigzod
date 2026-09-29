@@ -500,16 +500,8 @@ pub const Server = struct {
         try s.relayInt(p, to, .set_lplayer_voteinfo, @intFromEnum(p.vote));
     }
 
-    fn relayLoginInfo(s: *Server, p: *const Player, to: Audience) Error!void {
-        try s.sendPacket(to, .set_lplayer_loginfo, protocol.SetPlayerLogInfo{
-            .p_id = p.id,
-            .db_id = -1,
-            .voting_power = 1,
-            .total_games = 0,
-            .activated = true,
-            .logged_in = false,
-            .bot_logged_in = p.bot,
-        });
+    fn relayBot(s: *Server, p: *const Player, to: Audience) Error!void {
+        try s.sendPacket(to, .set_lplayer_bot, protocol.SetPlayerBot{ .p_id = p.id, .bot = p.bot });
     }
 
     fn sendPlayerList(s: *Server, to: *const Player) Error!void {
@@ -521,7 +513,7 @@ pub const Server = struct {
             try s.relayTeam(p, audience);
             try s.relayMode(p, audience);
             try s.relayIgnored(p, audience);
-            try s.relayLoginInfo(p, audience);
+            try s.relayBot(p, audience);
             try s.relayVoteChoice(p, audience);
         }
     }
@@ -623,9 +615,6 @@ pub const Server = struct {
             .request_version => try s.relayVersion(me),
             .get_game_paused => try s.relayPaused(me),
             .get_game_speed => try s.relaySpeed(me),
-            .request_loginoff => try s.sendPacket(me, .give_loginoff, protocol.LoginOff{ .show_login = false }),
-            .send_login, .create_user => try s.news(me, "login error: no database used"),
-            .buy_regkey => try s.news(me, "buy reg key error: server not configured for selling registration keys"),
 
             .set_name => {
                 const name = cString(data) orelse return;
@@ -655,7 +644,7 @@ pub const Server = struct {
                 p.bot = true;
                 try p.setName(s.gpa, "Bot");
                 try s.relayName(p, .all);
-                try s.relayLoginInfo(p, .all);
+                try s.relayBot(p, .all);
             },
             .send_chat => {
                 const text = cString(data) orelse return;

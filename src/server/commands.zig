@@ -20,21 +20,16 @@ const Command = struct {
 const list = [_]Command{
     .{ .name = "help", .usage = "/help command", .purpose = "explain how to use a command and what it is used for", .run = help },
     .{ .name = "listcommands", .usage = "/listcommands", .purpose = "list all of the available commands", .run = listCommands },
-    .{ .name = "login", .usage = "/login username, password", .purpose = "log into your username", .run = noAccounts },
-    .{ .name = "logout", .usage = "/logout", .purpose = "log out of your username", .run = noAccounts },
-    .{ .name = "createuser", .usage = "/createuser username, loginname, password, email", .purpose = "create a new user", .run = noAccounts },
     .{ .name = "pause", .usage = "/pause", .purpose = "pauses the game", .run = pause },
     .{ .name = "resume", .usage = "/resume", .purpose = "resumes the game", .run = unpause },
     .{ .name = "listmaps", .usage = "/listmaps", .purpose = "lists available maps to be used with /changemap", .run = listMaps },
     .{ .name = "changemap", .usage = "/changemap map_number", .purpose = "reset game to desired map, use /listmaps to get the map_number", .run = changeMap },
     .{ .name = "startbot", .usage = "/startbot team_color", .purpose = "start a bot", .run = startBot },
     .{ .name = "stopbot", .usage = "/stopbot team_color", .purpose = "stop a bot", .run = stopBot },
-    .{ .name = "playerinfo", .usage = "/playerinfo", .purpose = "gives details on your logged in user", .run = playerInfo },
     .{ .name = "currentmap", .usage = "/currentmap", .purpose = "gives the name of the current map", .run = currentMap },
     .{ .name = "resetgame", .usage = "/resetgame", .purpose = "resets the current game", .run = resetGame },
     .{ .name = "changeteam", .usage = "/changeteam team_color", .purpose = "change your team", .run = changeTeam },
     .{ .name = "reshuffleteams", .usage = "/reshuffleteams", .purpose = "randomly places players on new teams and preserves balance", .run = reshuffleTeams },
-    .{ .name = "buyregistration", .usage = "/buyregistration", .purpose = "downloads an offline registration key from the server for a cost in voting power", .run = buyRegistration },
     .{ .name = "changespeed", .usage = "/changespeed multiplier_number", .purpose = "changes the game speed. half speed is 50, double speed is 200", .run = changeSpeed },
     .{ .name = "version", .usage = "/version", .purpose = "returns the version of the server", .run = version },
 };
@@ -73,12 +68,8 @@ fn help(s: *Server, p: *Player, args: []const u8) Error!void {
 }
 
 fn listCommands(s: *Server, p: *Player, _: []const u8) Error!void {
-    try tell(s, p, "command list: help, listcommands, login, logout, createuser, pause, resume, listmaps, changemap, startbot, stopbot");
-    try tell(s, p, "command list: playerinfo, currentmap, resetgame, changeteam, reshuffleteams, buyregistration, changespeed, version");
-}
-
-fn noAccounts(s: *Server, p: *Player, _: []const u8) Error!void {
-    try tell(s, p, "login error: no database used");
+    try tell(s, p, "command list: help, listcommands, pause, resume, listmaps, changemap, startbot, stopbot");
+    try tell(s, p, "command list: currentmap, resetgame, changeteam, reshuffleteams, changespeed, version");
 }
 
 fn pause(s: *Server, p: *Player, _: []const u8) Error!void {
@@ -142,12 +133,6 @@ fn stopBot(s: *Server, p: *Player, args: []const u8) Error!void {
     try tell(s, p, line.text());
 }
 
-fn playerInfo(s: *Server, p: *Player, _: []const u8) Error!void {
-    try tellFmt(s, p, "player info: name: '{s}'", .{p.name.items});
-    try tellFmt(s, p, "player info: team: {s}", .{p.team.name()});
-    try tell(s, p, "player info: logged in: no");
-}
-
 fn currentMap(s: *Server, p: *Player, _: []const u8) Error!void {
     try tellFmt(s, p, "current map: {s}", .{s.map_name.items});
 }
@@ -168,10 +153,6 @@ fn changeTeam(s: *Server, p: *Player, args: []const u8) Error!void {
 
 fn reshuffleTeams(s: *Server, p: *Player, _: []const u8) Error!void {
     _ = try s.startVote(.reshuffle_teams, -1, p);
-}
-
-fn buyRegistration(s: *Server, p: *Player, _: []const u8) Error!void {
-    try s.send(.{ .player = p.id }, .poll_buy_regkey, &.{});
 }
 
 fn changeSpeed(s: *Server, p: *Player, args: []const u8) Error!void {

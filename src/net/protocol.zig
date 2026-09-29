@@ -62,7 +62,7 @@ pub const Message = enum(i32) {
     set_lplayer_team,
     set_lplayer_mode,
     set_lplayer_ignored,
-    set_lplayer_loginfo,
+    set_lplayer_bot,
     set_lplayer_voteinfo,
     send_bot_bypass_data,
     update_game_paused,
@@ -77,17 +77,19 @@ pub const Message = enum(i32) {
     request_player_id,
     request_selectable_map_list,
     give_selectable_map_list,
-    send_login,
-    request_loginoff,
-    give_loginoff,
-    create_user,
+    // (four messages of the old user accounts, no longer used)
+    retired_send_login,
+    retired_request_loginoff,
+    retired_give_loginoff,
+    retired_create_user,
     set_grenade_amount,
     pickup_grenade_anim,
     do_portrait_anim,
     team_ended,
-    poll_buy_regkey,
-    buy_regkey,
-    return_regkey,
+    // (three messages of the old registration keys, no longer used)
+    retired_poll_buy_regkey,
+    retired_buy_regkey,
+    retired_return_regkey,
     get_game_speed,
     set_game_speed,
     update_game_speed,
@@ -227,14 +229,10 @@ pub const SetPlayerInt = extern struct {
     value: i32 align(1),
 };
 
-pub const SetPlayerLogInfo = extern struct {
+/// Whether a player is a computer player.
+pub const SetPlayerBot = extern struct {
     p_id: i32 align(1),
-    db_id: i32 align(1),
-    voting_power: i32 align(1),
-    total_games: i32 align(1),
-    activated: bool,
-    logged_in: bool,
-    bot_logged_in: bool,
+    bot: bool,
 };
 
 pub const GamePaused = extern struct {
@@ -249,10 +247,6 @@ pub const VoteInfo = extern struct {
 
 pub const PlayerId = extern struct {
     p_id: i32 align(1),
-};
-
-pub const LoginOff = extern struct {
-    show_login: bool,
 };
 
 pub const GrenadeAmount = extern struct {
@@ -278,10 +272,6 @@ pub const DoPortraitAnim = extern struct {
 pub const TeamEnded = extern struct {
     team: i32 align(1),
     won: bool,
-};
-
-pub const BuyRegistration = extern struct {
-    buf: [16]u8,
 };
 
 pub const AddBuildingQueue = extern struct {
@@ -373,7 +363,7 @@ comptime {
     std.debug.assert(@sizeOf(ObjectInit) == 22);
     std.debug.assert(@sizeOf(SetBuildingState) == 26);
     std.debug.assert(@sizeOf(DestroyObject) == 15);
-    std.debug.assert(@sizeOf(SetPlayerLogInfo) == 19);
+    std.debug.assert(@sizeOf(SetPlayerBot) == 5);
     std.debug.assert(@sizeOf(Version) == 50);
     std.debug.assert(@sizeOf(RepairBuildingAnim) == 14);
     std.debug.assert(@sizeOf(ObjectTeam) == 7);
