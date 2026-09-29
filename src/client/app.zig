@@ -53,10 +53,10 @@ pub const App = struct {
     terrain_info: *game.map.Terrain,
     sheets: terrain_mod.Sheets,
     terrain: ?terrain_mod.Terrain = null,
-    fonts: font.Fonts,
+    fonts: *const font.Fonts,
     sprites: *Sprites,
     objects: Renderer,
-    fx: Effects,
+    fx: *Effects,
     hud: hud_mod.Hud,
     cursors: cursor.Cursors,
     control: Control,
@@ -65,7 +65,7 @@ pub const App = struct {
     msg_images: messages.Images,
     news: messages.News,
     notices: messages.Notices = .{},
-    sounds: sound.Sounds = .{},
+    sounds: sound.Sounds,
     /// 0 (off) to 4 (full).
     volume: u8 = 4,
     menu_art: menus.Art,
@@ -135,11 +135,29 @@ pub const App = struct {
             return err;
         };
 
+        var session = Session.init(gpa, conn, terrain_info, .{ .name = options.name, .team = options.team });
+        errdefer session.deinit();
+
         var display = try Display.open(gpa, "Zod Engine", options.width, options.height, options.fullscreen);
         errdefer display.close();
 
+        const seed: u64 = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
+        const sprites = try Sprites.load(assets);
+        const fonts = try font.Fonts.load(assets);
+        const fx = try Effects.create(gpa, sprites, &assets.palettes, seed +% 1);
+        errdefer fx.destroy();
+
+        // (the rest is kept with the assets)
+        const sheets = try terrain_mod.Sheets.load(assets);
+        const hud = try hud_mod.Hud.init(assets, fonts);
+        const cursors = try cursor.Cursors.load(assets);
+        const window_images = try windows.Images.load(assets);
+        const list_images = try windows.ListImages.load(assets);
+        const msg_images = try messages.Images.load(assets);
+        const menu_art = try menus.Art.load(assets);
+
+        try session.start();
         const app = try gpa.create(App);
-        errdefer gpa.destroy(app);
         app.* = .{
             .gpa = gpa,
             .io = io,
@@ -149,36 +167,24 @@ pub const App = struct {
             .width = display.frame.w,
             .height = display.frame.h,
             .terrain_info = terrain_info,
-            .sheets = undefined,
-            .fonts = undefined,
-            .sprites = undefined,
-            .objects = undefined,
-            .fx = undefined,
-            .hud = undefined,
-            .cursors = undefined,
+            .sheets = sheets,
+            .fonts = fonts,
+            .sprites = sprites,
+            .objects = .init(gpa, sprites, fonts, fx),
+            .fx = fx,
+            .hud = hud,
+            .cursors = cursors,
             .control = .init(gpa),
-            .window_images = undefined,
-            .list_images = undefined,
-            .msg_images = undefined,
-            .menu_art = undefined,
+            .window_images = window_images,
+            .list_images = list_images,
+            .msg_images = msg_images,
+            .menu_art = menu_art,
             .news = .{ .gpa = gpa },
-            .session = Session.init(gpa, conn, terrain_info, .{ .name = options.name, .team = options.team }),
-            .prng = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
+            .sounds = .open(assets.dir),
+            .session = session,
+            .prng = .init(seed),
             .clock_origin = std.Io.Clock.awake.now(io),
         };
-        app.sheets = try .load(assets);
-        app.fonts = try .load(assets);
-        app.hud = try .init(assets, &app.fonts);
-        app.cursors = try .load(assets);
-        app.window_images = try .load(assets);
-        app.list_images = try .load(assets);
-        app.msg_images = try .load(assets);
-        app.menu_art = try .load(assets);
-        app.sounds.init(assets.dir);
-        app.sprites = try Sprites.load(assets);
-        app.fx = Effects.init(gpa, app.sprites, &assets.palettes, app.prng.random());
-        app.objects = Renderer.init(gpa, app.sprites, &app.fonts, &app.fx);
-        try app.session.start();
         return app;
     }
 
@@ -186,7 +192,7 @@ pub const App = struct {
         const gpa = app.gpa;
         if (app.terrain) |*t| t.deinit();
         app.objects.deinit();
-        app.fx.deinit();
+        app.fx.destroy();
         app.closeWindow();
         app.sounds.deinit();
         app.news.deinit();
@@ -993,13 +999,13 @@ pub const App = struct {
             try app.objects.draw(cv, world, v);
             app.objects.drawAfter(cv, world, v);
             app.fx.draw(cv, v);
-            app.control.drawSelection(cv, world, &app.assets.palettes, &app.fonts, time);
+            app.control.drawSelection(cv, world, &app.assets.palettes, app.fonts, time);
             if (app.window) |*w| {
                 // Gone, or no longer ours.
                 const b = world.find(w.building);
                 if (b == null or b.?.owner != app.control.team) app.closeWindow();
             }
-            if (app.window) |*w| w.draw(cv, world, &app.window_images, app.sprites, &app.fonts, &app.fx, app.prng.random());
+            if (app.window) |*w| w.draw(cv, world, &app.window_images, app.sprites, app.fonts, app.fx, app.prng.random());
             if (app.placing) |pl| app.drawPlacing(cv, world, pl.building, pl.gun);
             if (app.drag) |d| {
                 const p = app.mouseMap();
@@ -1009,9 +1015,9 @@ pub const App = struct {
             }
 
             const screen_map: gfx.Canvas = .{ .target = app.display.frame, .clip = area };
-            app.factory_list.draw(screen_map, world, app.control.team, &app.list_images, &app.fonts, area);
-            app.notices.draw(screen_map, world, app.control.team, world.clock.paused, app.voteBox(), &app.msg_images, &app.fonts, area, now);
-            app.news.draw(screen_map, &app.fonts, if (app.factory_list.shown) 5 + 142 else 5, area.h, now);
+            app.factory_list.draw(screen_map, world, app.control.team, &app.list_images, app.fonts, area);
+            app.notices.draw(screen_map, world, app.control.team, world.clock.paused, app.voteBox(), &app.msg_images, app.fonts, area, now);
+            app.news.draw(screen_map, app.fonts, if (app.factory_list.shown) 5 + 142 else 5, area.h, now);
 
             app.hud.updateButtons(world, app.session.team);
             app.hud.update(world, time, now, app.prng.random());
@@ -1032,7 +1038,7 @@ pub const App = struct {
         const screen_cv: gfx.Canvas = .{ .target = app.display.frame, .clip = .{ .x = 0, .y = 0, .w = app.width, .h = app.height } };
         const ctx = app.menuContext();
         app.menus.update(ctx, now);
-        app.menus.draw(screen_cv, &app.menu_art, &app.fonts, ctx, app.width, app.height);
+        app.menus.draw(screen_cv, &app.menu_art, app.fonts, ctx, app.width, app.height);
         const over_menu = app.menus.contains(ctx, app.mouse_x, app.mouse_y);
         const kind = if (app.overMap(app.mouse_x, app.mouse_y) and !over_menu) app.control.cursorKind(world, app.drag != null) else .cursor;
         app.cursors.draw(screen_cv, kind, app.control.team, now, app.mouse_x, app.mouse_y);

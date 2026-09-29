@@ -384,6 +384,8 @@ pub const Effects = struct {
     gpa: std.mem.Allocator,
     s: *const Fx,
     palettes: *const gfx.TeamPalettes,
+    prng: std.Random.DefaultPrng,
+    /// Draws from `prng` (which is why effects live on the heap).
     rng: std.Random,
     transforms: Transforms,
     ground: std.ArrayList(Effect) = .empty,
@@ -397,16 +399,21 @@ pub const Effects = struct {
     /// From the server's settings.
     grenade_speed: i32 = 200,
 
-    pub fn init(gpa: std.mem.Allocator, s: *const sprites.Sprites, palettes: *const gfx.TeamPalettes, rng: std.Random) Effects {
-        return .{ .gpa = gpa, .s = &s.fx, .palettes = palettes, .rng = rng, .transforms = .{ .gpa = gpa } };
+    pub fn create(gpa: std.mem.Allocator, s: *const sprites.Sprites, palettes: *const gfx.TeamPalettes, seed: u64) std.mem.Allocator.Error!*Effects {
+        const fx = try gpa.create(Effects);
+        fx.* = .{ .gpa = gpa, .s = &s.fx, .palettes = palettes, .prng = .init(seed), .rng = undefined, .transforms = .{ .gpa = gpa } };
+        fx.rng = fx.prng.random();
+        return fx;
     }
 
-    pub fn deinit(fx: *Effects) void {
+    pub fn destroy(fx: *Effects) void {
+        const gpa = fx.gpa;
         fx.transforms.deinit();
-        fx.ground.deinit(fx.gpa);
-        fx.air.deinit(fx.gpa);
-        fx.spawned.deinit(fx.gpa);
-        fx.sounds.deinit(fx.gpa);
+        fx.ground.deinit(gpa);
+        fx.air.deinit(gpa);
+        fx.spawned.deinit(gpa);
+        fx.sounds.deinit(gpa);
+        gpa.destroy(fx);
     }
 
     pub const Heard = struct { sound: SoundEffect, where: gfx.Rect };
@@ -1416,9 +1423,8 @@ test "effects run their course" {
     const a = try @import("assets.zig").Assets.init(gpa, "bin/assets");
     defer a.deinit();
     const all = try sprites.Sprites.load(a);
-    var prng = std.Random.DefaultPrng.init(1);
-    var fx = Effects.init(gpa, all, &a.palettes, prng.random());
-    defer fx.deinit();
+    const fx = try Effects.create(gpa, all, &a.palettes, 1);
+    defer fx.destroy();
 
     const io = std.testing.io;
     var assets = try std.Io.Dir.cwd().openDir(io, "bin/assets", .{});

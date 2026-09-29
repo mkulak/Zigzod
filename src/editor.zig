@@ -228,9 +228,9 @@ pub const Editor = struct {
 
     terrain_info: *mapfmt.Terrain,
     sheets: terrain_mod.Sheets,
-    fonts: font.Fonts,
+    fonts: *const font.Fonts,
     sprites: *Sprites,
-    fx: Effects,
+    fx: *Effects,
     objects: Renderer,
 
     model: Model,
@@ -271,6 +271,13 @@ pub const Editor = struct {
     quit: bool = false,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io, data_path: []const u8, options: Options) !*Editor {
+        const e = try create(gpa, io, data_path, options);
+        errdefer e.deinit();
+        try e.rebuild();
+        return e;
+    }
+
+    fn create(gpa: std.mem.Allocator, io: std.Io, data_path: []const u8, options: Options) !*Editor {
         const dir = try std.fmt.allocPrint(gpa, "{s}/assets", .{data_path});
         defer gpa.free(dir);
         const assets = try Assets.init(gpa, dir);
@@ -295,8 +302,13 @@ pub const Editor = struct {
         var display = try Display.open(gpa, "Zod Map Editor", 800, 600, false);
         errdefer display.close();
 
+        const sheets = try terrain_mod.Sheets.load(assets);
+        const fonts = try font.Fonts.load(assets);
+        const sprites = try Sprites.load(assets);
+        const fx = try Effects.create(gpa, sprites, &assets.palettes, seed +% 1);
+        errdefer fx.destroy();
+
         const e = try gpa.create(Editor);
-        errdefer gpa.destroy(e);
         e.* = .{
             .gpa = gpa,
             .io = io,
@@ -304,22 +316,16 @@ pub const Editor = struct {
             .path = options.path,
             .display = display,
             .terrain_info = terrain_info,
-            .sheets = undefined,
-            .fonts = undefined,
-            .sprites = undefined,
-            .fx = undefined,
-            .objects = undefined,
+            .sheets = sheets,
+            .fonts = fonts,
+            .sprites = sprites,
+            .fx = fx,
+            .objects = .init(gpa, sprites, fonts, fx),
             .model = model,
             .world = World.init(gpa, terrain_info, seed),
             .prng = prng,
             .clock_origin = std.Io.Clock.awake.now(io),
         };
-        e.sheets = try .load(assets);
-        e.fonts = try .load(assets);
-        e.sprites = try Sprites.load(assets);
-        e.fx = Effects.init(gpa, e.sprites, &assets.palettes, e.prng.random());
-        e.objects = Renderer.init(gpa, e.sprites, &e.fonts, &e.fx);
-        try e.rebuild();
         return e;
     }
 
@@ -328,7 +334,7 @@ pub const Editor = struct {
         if (e.ground) |*g| g.deinit();
         if (e.minimap) |m| m.deinit(gpa);
         e.objects.deinit();
-        e.fx.deinit();
+        e.fx.destroy();
         e.world.deinit();
         e.model.deinit();
         e.undo.deinit(gpa);

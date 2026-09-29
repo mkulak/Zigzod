@@ -152,18 +152,18 @@ pub const Sounds = struct {
 
     /// Open the audio device and load everything (`assets` is the folder
     /// with sounds/).
-    pub fn init(s: *Sounds, assets: []const u8) void {
-        s.* = .{};
+    pub fn open(assets: []const u8) Sounds {
+        var s: Sounds = .{};
         s.clearSlots();
         if (!c.SDL_InitSubSystem(c.SDL_INIT_AUDIO)) {
             std.log.info("no sound: {s}", .{c.SDL_GetError()});
-            return;
+            return s;
         }
         s.device = c.SDL_OpenAudioDevice(c.SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, null);
         if (s.device == 0) {
             std.log.info("no sound: {s}", .{c.SDL_GetError()});
             c.SDL_QuitSubSystem(c.SDL_INIT_AUDIO);
-            return;
+            return s;
         }
         s.on = true;
         for (&s.streams) |*st| st.* = s.newStream();
@@ -189,6 +189,7 @@ pub const Sounds = struct {
         };
         s.music.load(assets);
         s.music.setGain(s.master);
+        return s;
     }
 
     /// A stream bound to the device (its input format is set per sound).

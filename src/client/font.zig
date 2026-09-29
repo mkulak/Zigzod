@@ -80,8 +80,9 @@ pub const Font = struct {
 pub const Fonts = struct {
     fonts: [@typeInfo(Kind).@"enum".fields.len]Font,
 
-    pub fn load(a: *Assets) Assets.Error!Fonts {
-        var f: Fonts = undefined;
+    /// Load all fonts (kept with the assets).
+    pub fn load(a: *Assets) Assets.Error!*const Fonts {
+        const f = try a.allocator().create(Fonts);
         for (&f.fonts, 0..) |*font, i| font.* = try .load(a, @enumFromInt(i));
         return f;
     }
