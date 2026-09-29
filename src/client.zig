@@ -1,12 +1,15 @@
-//! The game client (in progress; the C++ client is still the one to play).
+//! The game client.
 
 pub const gfx = @import("client/gfx.zig");
+pub const assets = @import("client/assets.zig");
 pub const terrain = @import("client/terrain.zig");
 pub const font = @import("client/font.zig");
 pub const sprites = @import("client/sprites.zig");
 pub const objects = @import("client/objects.zig");
 pub const units = @import("client/units.zig");
 pub const effects = @import("client/effects.zig");
+pub const crane_site = @import("client/crane_site.zig");
+pub const animals = @import("client/animals.zig");
 pub const hud = @import("client/hud.zig");
 pub const cursor = @import("client/cursor.zig");
 pub const control = @import("client/control.zig");

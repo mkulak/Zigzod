@@ -2,6 +2,7 @@
 //! side of ZCannon, ZVehicle, ZRobot and their subclasses).
 
 const std = @import("std");
+const crane_site = @import("crane_site.zig");
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
 const Sprites = @import("sprites.zig").Sprites;
@@ -77,6 +78,8 @@ pub const UnitVisual = struct {
     crane_anim: bool = false,
     hook_i: u8 = 0,
     next_hook_time: f64 = 0,
+    /// Cranes: the construction site while repairing.
+    site: ?crane_site.Site = null,
     /// Tracks and dust are left behind every 0.2 s.
     next_track_time: f64 = 0,
     /// APCs: when each passenger shoots next.
@@ -316,6 +319,9 @@ fn updateVehicle(o: *const Object, kind: k.Vehicle, lid_open: bool, v: *UnitVisu
                 v.next_hook_time = t + 0.01;
                 v.hook_i = (v.hook_i + 1) % 16;
             }
+            if (v.site) |*site| if (!site.update(u.rng, t)) {
+                v.site = null;
+            };
         },
         else => if (t >= v.next_turret_time) {
             if (target) |tg| {
@@ -617,6 +623,7 @@ fn drawVehicle(cv: Canvas, s: *const Sprites, o: *const Object, kind: k.Vehicle,
         },
         .crane => {
             if (o.isDestroyed()) return put(cv, vs.wasted[owner], x, y, false);
+            if (v.site) |*site| site.draw(cv, &s.crane.site);
             put(cv, vs.base[owner][d][f % 3], x, y, hit);
             if (!manned) return;
             const cx = x + ([8]i32{ -6, -3, 0, 3, 6, 1, 0, -2 })[d];

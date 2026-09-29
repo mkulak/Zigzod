@@ -320,7 +320,11 @@ pub const Editor = struct {
             .fonts = fonts,
             .sprites = sprites,
             .fx = fx,
-            .objects = .init(gpa, sprites, fonts, fx),
+            .objects = blk: {
+                var r: Renderer = .init(gpa, sprites, fonts, fx);
+                r.animals = false;
+                break :blk r;
+            },
             .model = model,
             .world = World.init(gpa, terrain_info, seed),
             .prng = prng,

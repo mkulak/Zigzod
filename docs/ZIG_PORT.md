@@ -65,6 +65,8 @@ Data formats (maps, `.tileinfo`, settings files, assets) are unchanged.
       client/sprites.zig  all object and effect images
       client/objects.zig  object animations and drawing (buildings, items)
       client/units.zig    cannon, vehicle and robot animations
+      client/animals.zig  birds and hut animals
+      client/crane_site.zig  what a crane sets up while repairing
       client/effects.zig  shots, explosions, debris, wrecks, fires, tracks;
                           its parts in client/effects/: motion, transforms
                           (rotated images), fires, deaths, update, draw
@@ -106,9 +108,8 @@ run from the repository root.
 2. **Server** - the game simulation (objects, pathfinding, combat, production,
    zones, votes, commands). Done; it was validated with the C++ client and
    bots playing on it.
-3. **Client** - rendering, HUD, windows, menus, sound and music. Done. Not
-   ported: the animals (birds, hut animals) and the crane's construction
-   effect, which are decoration.
+3. **Client** - rendering, HUD, windows, menus, sound and music, and the
+   decoration: birds, hut animals and the crane's construction site. Done.
 4. **Bot** and **map editor** - done: `zod bot` joins any server, and
    `zod server -b team` (or the Manage Bots menu) runs bots inside the
    server; `zod edit file.map` edits maps, `-n WxH` makes a new one.
@@ -172,3 +173,7 @@ copying them (each one is noted in the commit that fixes it), e.g.:
 * drawing images no longer goes through SDL's blit, which costs ~200 us a
   call on sdl12-compat: preparing a map's ground went from 1.2 s to 6 ms.
 * the map editor saves its map picture as PNG (was a 5 MB BMP).
+* the crane's construction site starts out centered on the crane (the C++
+  started each piece with its corner there, so they jumped when packing
+  up); hut animals keep within their roaming distance even where the map's
+  passability is unknown, and don't appear in the map editor.

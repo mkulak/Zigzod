@@ -1,6 +1,7 @@
 //! The client program: window, main loop, camera and input (from ZPlayer).
 
 const std = @import("std");
+const animals = @import("animals.zig");
 const c = @import("c");
 const game = @import("../game.zig");
 const net = @import("../net.zig");
@@ -65,6 +66,7 @@ pub const App = struct {
     msg_images: messages.Images,
     news: messages.News,
     notices: messages.Notices = .{},
+    birds: animals.Birds = .{},
     sounds: sound.Sounds,
     /// 0 (off) to 4 (full).
     volume: u8 = 4,
@@ -246,6 +248,7 @@ pub const App = struct {
                     break :blk null;
                 };
                 app.focused = false;
+                app.birds = .init(m.planet(), m.header.width, m.header.height, app.prng.random(), app.session.world.now());
                 app.fx.reset();
                 app.hud.reset();
                 app.hud.setMap(m);
@@ -298,7 +301,7 @@ pub const App = struct {
                     app.hud.speak(o, .grenades_collected, app.realTime());
                 }
             },
-            .crane_anim => |ca| if (app.session.find(ca.ref_id)) |o| app.objects.craneAnim(o, ca.on),
+            .crane_anim => |ca| if (app.session.find(ca.ref_id)) |o| app.objects.craneAnim(o, app.session.find(ca.rep_ref_id), ca.on),
             .repair_anim => |ra| if (app.session.find(ra.ref_id)) |o| {
                 if (o.owner == app.control.team and o.owner != .none) app.sounds.announce(if (ra.on) .starting_repair else .vehicle_repaired, app.realTime(), app.prng.random());
                 app.objects.repairAnim(o, ra.on, ra.remaining_time, app.session.world.now());
@@ -992,6 +995,7 @@ pub const App = struct {
             const time = world.now();
             app.objects.update(world, t, time);
             app.fx.update(.{ .time = time, .world = world, .terrain = t });
+            app.birds.update(app.fx, app.prng.random(), time);
             try t.draw(cv, v, time, world.zones.items, app.prng.random());
             app.fx.drawGround(cv, v);
             app.objects.drawPre(cv, world, v);
@@ -999,6 +1003,7 @@ pub const App = struct {
             try app.objects.draw(cv, world, v);
             app.objects.drawAfter(cv, world, v);
             app.fx.draw(cv, v);
+            app.birds.draw(cv, v, app.sprites, app.fx);
             app.control.drawSelection(cv, world, &app.assets.palettes, app.fonts, time);
             if (app.window) |*w| {
                 // Gone, or no longer ours.

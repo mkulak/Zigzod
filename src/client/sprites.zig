@@ -115,6 +115,62 @@ pub const Jeep = struct {
 pub const Crane = struct {
     arm: [dirs]Image,
     hook: [16]Image,
+    /// The construction site set up while repairing a building.
+    site: CraneSite,
+};
+
+pub const CraneSite = struct {
+    /// The mixer unfolding (7) to standing (0).
+    conco: [teams][8]Image,
+    sign: [teams]Image,
+    sign_flip: [teams][8]Image,
+    cone: [teams]Image,
+    /// Cones while carried (no shadow).
+    cone_no_shadow: [teams]Image,
+    jackhammer: [teams][2]Image,
+    paper: [teams][2]Image,
+    point: [teams][3]Image,
+    travel_right: [teams]Image,
+    travel_left: [teams]Image,
+    travel_updown: [teams]Image,
+};
+
+/// The animals living in huts.
+pub const HutAnimal = enum {
+    green_snake,
+    green_lizard,
+    desert_rabit,
+    raptor,
+    mini_raptor,
+    pig_dino,
+    yellow_worm,
+    arctic_rabit,
+    penguin,
+    white_wolf,
+    ostrich,
+    rat,
+    turtle,
+    red_worm,
+    green_eyed_fox,
+
+    pub const count = @typeInfo(HutAnimal).@"enum".fields.len;
+
+    pub fn walkFrames(a: HutAnimal) u8 {
+        return if (a == .green_snake) 8 else 4;
+    }
+
+    /// Snakes and worms don't look around.
+    pub fn lookFrames(a: HutAnimal) u8 {
+        return switch (a) {
+            .green_snake, .yellow_worm, .red_worm => 0,
+            else => 4,
+        };
+    }
+};
+
+pub const HutAnimalArt = struct {
+    walk: [dirs][8]Image,
+    look: [dirs][4]Image,
 };
 
 pub const RobotSprites = struct {
@@ -216,6 +272,11 @@ pub const Sprites = struct {
     robot: RobotSprites,
     fx: EffectSprites,
 
+    // Animals.
+    /// One picture per wing beat, turned as the bird flies.
+    birds: [planets][5]Image,
+    hut_animals: [HutAnimal.count]HutAnimalArt,
+
     /// Load everything (kept in the assets' arena).
     pub fn load(a: *Assets) Error!*Sprites {
         const s = try a.allocator().create(Sprites);
@@ -225,6 +286,7 @@ pub const Sprites = struct {
         try s.loadVehicles(a);
         try s.loadRobots(a);
         try s.loadEffects(a);
+        try s.loadAnimals(a);
         return s;
     }
 
@@ -385,11 +447,31 @@ pub const Sprites = struct {
         // The crane's arm is drawn facing away.
         const arm = try a.load([dirs]Image, "units/vehicles/crane/crane_r{angle}.png", .nothing);
         for (&s.crane.arm, 0..) |*arm_d, d| arm_d.* = arm[(d + 4) % dirs];
+        try a.fill(&s.crane.site, crane_site_art);
         // The hook goes down and back up.
         const hook = try a.load([8]Image, "units/vehicles/crane/hook_n{frame}.png", .nothing);
         for (hook, 0..) |h, i| {
             s.crane.hook[i] = h;
             s.crane.hook[15 - i] = h;
+        }
+    }
+
+    fn loadAnimals(s: *Sprites, a: *Assets) Error!void {
+        s.birds = try a.load([planets][5]Image, "other/birds/bird_{planet}_r000_n{frame}.png", .nothing);
+        inline for (@typeInfo(HutAnimal).@"enum".fields) |f| {
+            const kind: HutAnimal = @enumFromInt(f.value);
+            const art = &s.hut_animals[f.value];
+            const base = "other/hut_animals/" ++ f.name;
+            art.* = .{ .walk = @splat(@splat(a.nothing)), .look = @splat(@splat(a.nothing)) };
+            const walk = try a.load([dirs][kind.walkFrames()]Image, base ++ "_walk_r{angle}_n{frame}.png", .nothing);
+            for (&art.walk, walk) |*to, from| to[0..from.len].* = from;
+            // Looking around is drawn for four directions; the diagonals
+            // use the one before them.
+            if (kind.lookFrames() > 0) for (0..dirs / 2) |i| {
+                const look = try a.loadAt([4]Image, base ++ "_look_r{angle}_n{frame}.png", .nothing, .{ .angle = 2 * i });
+                art.look[2 * i] = look;
+                art.look[2 * i + 1] = look;
+            };
         }
     }
 
@@ -532,6 +614,20 @@ const repair_art = .{
 const jeep_art = .{
     .gun = "units/vehicles/jeep/fire_r{angle}_n00.png",
     .gun_fire = "units/vehicles/jeep/fire_r{angle}_n01.png",
+};
+
+const crane_site_art = .{
+    .conco = "units/vehicles/crane/effects/conco_{team}_n{frame}.png",
+    .sign = "units/vehicles/crane/effects/sign_{team}.png",
+    .sign_flip = "units/vehicles/crane/effects/sign_flip_{team}_n{frame}.png",
+    .cone = "units/vehicles/crane/effects/cone_{team}.png",
+    .cone_no_shadow = "units/vehicles/crane/effects/cone_no_shadow_{team}.png",
+    .jackhammer = "units/vehicles/crane/effects/robot_jackhammer_{team}_n{frame}.png",
+    .paper = "units/vehicles/crane/effects/robot_paper_{team}_n{frame}.png",
+    .point = "units/vehicles/crane/effects/robot_point_{team}_n{frame}.png",
+    .travel_right = "units/vehicles/crane/effects/robot_travel_right_{team}.png",
+    .travel_left = "units/vehicles/crane/effects/robot_travel_left_{team}.png",
+    .travel_updown = "units/vehicles/crane/effects/robot_travel_updown_{team}.png",
 };
 
 const robot_art = .{

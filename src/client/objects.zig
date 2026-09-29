@@ -6,6 +6,7 @@
 //! changes; the parts units can walk behind are drawn over them afterwards.
 
 const std = @import("std");
+const animals = @import("animals.zig");
 const fit = @import("../text.zig").fit;
 const game = @import("../game.zig");
 const gfx = @import("gfx.zig");
@@ -53,6 +54,8 @@ pub const Visual = struct {
     /// Buildings burn when damaged.
     fires: effects.BuildingFires = .{ .max = 0 },
     unit: units.UnitVisual = .{},
+    /// Huts: the animals around them.
+    hut: animals.Hut = .{},
 
     fn deinit(v: *Visual, gpa: std.mem.Allocator) void {
         if (v.timer) |t| t.deinit(gpa);
@@ -92,6 +95,8 @@ pub const Renderer = struct {
     /// Set when a map is loaded.
     planet: ?k.Planet = null,
     our_team: k.Team = .none,
+    /// Animals come out of huts (not in the map editor).
+    animals: bool = true,
     /// How deep robots sink into water, per map tile.
     submerge: []u8 = &.{},
     map_width: u32 = 0,
@@ -185,9 +190,9 @@ pub const Renderer = struct {
             const v = r.visual(o);
             switch (o.kind) {
                 .flag => _ = v.tick(time, 0.2),
+                .item => |item| if (item == .hut and r.animals) if (r.planet) |p| v.hut.update(o, world, p, r.rng.random(), time),
                 .building => |*b| r.updateBuilding(o, b, v, terrain, time),
                 .robot, .vehicle, .cannon => units.update(o, &v.unit, r.unitUpdate(world)),
-                else => {},
             }
         }
     }
@@ -232,8 +237,19 @@ pub const Renderer = struct {
         units.pickupGrenades(&r.visual(o).unit);
     }
 
-    pub fn craneAnim(r: *Renderer, o: *const Object, on: bool) void {
-        r.visual(o).unit.crane_anim = on;
+    /// A crane starts (or stops) repairing `repairing`.
+    pub fn craneAnim(r: *Renderer, o: *const Object, repairing: ?*const Object, on: bool) void {
+        const u = &r.visual(o).unit;
+        u.crane_anim = on;
+        if (!on) {
+            if (u.site) |*site| site.leave(o.x, o.y, r.time);
+            return;
+        }
+        u.hook_i = 0;
+        const b = repairing orelse return;
+        if (b.kind != .building or o.owner == .none) return;
+        const rect: gfx.Rect = .{ .x = b.x, .y = b.y, .w = b.width_pix, .h = b.height_pix };
+        u.site = .start(&r.sprites.crane.site, o.owner, o.x, o.y, rect, b.kind.building.isBridge(), r.rng.random(), r.time);
     }
 
     fn updateBuilding(r: *Renderer, o: *const Object, b: *const game.object.Building, v: *Visual, terrain: *terrain_mod.Terrain, time: f64) void {
@@ -387,6 +403,9 @@ pub const Renderer = struct {
         const s = r.sprites;
         const planet = if (r.planet) |p| @intFromEnum(p) else return;
         for (world.objects.items) |o| {
+            // Hut animals walk under everything else, also when their hut
+            // is out of sight.
+            if (o.kind == .item and o.kind.item == .hut) r.visual(o).hut.draw(cv, s);
             if (!visible(o, view, 32)) continue;
             switch (o.kind) {
                 .item => |item| if (item == .rock) r.drawRock(cv, world, o, true),
